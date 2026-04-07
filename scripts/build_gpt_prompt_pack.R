@@ -249,6 +249,302 @@ latest_team_squad_snapshot <- function(squad_round_enriched, team_ids = NULL) {
     distinct(user_team_id, player_id, .keep_all = TRUE)
 }
 
+normalise_name <- function(x) {
+  cleaned <- tolower(trimws(gsub("[^a-z0-9]+", " ", x)))
+  vapply(strsplit(cleaned, "\\s+"), function(parts) {
+    paste(sort(parts[nzchar(parts)]), collapse = " ")
+  }, character(1))
+}
+
+decode_html_entities <- function(x) {
+  x <- gsub("&nbsp;", " ", x, fixed = TRUE)
+  x <- gsub("&amp;", "&", x, fixed = TRUE)
+  x <- gsub("&#038;", "&", x, fixed = TRUE)
+  x <- gsub("&quot;", "\"", x, fixed = TRUE)
+  x <- gsub("&#8217;", "'", x, fixed = TRUE)
+  x <- gsub("&#8211;", "-", x, fixed = TRUE)
+  x
+}
+
+strip_html_text <- function(x) {
+  x <- gsub("<br[^>]*>", " ", x, perl = TRUE)
+  x <- gsub("<[^>]+>", " ", x, perl = TRUE)
+  x <- decode_html_entities(x)
+  trimws(gsub("\\s+", " ", x))
+}
+
+parse_expected_return_round <- function(x) {
+  vapply(x, function(one_x) {
+    matched <- regmatches(one_x, regexpr("round\\s+[0-9]+", tolower(one_x), perl = TRUE))
+    if (!length(matched) || is.na(matched) || !nzchar(matched)) {
+      return(NA_integer_)
+    }
+    suppressWarnings(as.integer(gsub("[^0-9]", "", matched)))
+  }, integer(1))
+}
+
+fetch_zero_tackle_injuries <- function(
+  player_id_lookup = NULL,
+  current_round = NA_integer_,
+  page_url = "https://www.zerotackle.com/nrl/injuries-suspensions/"
+) {
+  html <- tryCatch(
+    paste(suppressWarnings(readLines(page_url, warn = FALSE, encoding = "UTF-8")), collapse = "\n"),
+    error = function(e) ""
+  )
+
+  if (!nzchar(html)) {
+    return(NULL)
+  }
+
+  row_matches <- gregexpr("(?s)<tr class='table-row-border'.*?</tr>", html, perl = TRUE)
+  rows <- regmatches(html, row_matches)[[1]]
+  if (!length(rows)) {
+    return(NULL)
+  }
+
+  parsed_rows <- lapply(rows, function(row) {
+    cells <- regmatches(row, gregexpr("(?s)<td[^>]*>.*?</td>", row, perl = TRUE))[[1]]
+    if (length(cells) < 4) {
+      return(NULL)
+    }
+    player_name <- strip_html_text(cells[[2]])
+    reason <- strip_html_text(cells[[3]])
+    expected_return <- strip_html_text(cells[[4]])
+    if (!nzchar(player_name)) {
+      return(NULL)
+    }
+    data.frame(
+      player_name = player_name,
+      zero_tackle_reason = reason,
+      zero_tackle_expected_return = expected_return,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  parsed <- bind_rows(parsed_rows)
+  if (!nrow(parsed)) {
+    return(NULL)
+  }
+
+  parsed <- parsed %>%
+    distinct(player_name, .keep_all = TRUE) %>%
+    mutate(
+      name_key = normalise_name(player_name),
+      zero_tackle_return_round = parse_expected_return_round(zero_tackle_expected_return),
+      zero_tackle_risk_band = case_when(
+        grepl("tbc|indef|season", tolower(zero_tackle_expected_return %||% "")) ~ "high",
+        !is.na(zero_tackle_return_round) & !is.na(current_round) & zero_tackle_return_round >= current_round + 1L ~ "high",
+        !is.na(zero_tackle_return_round) & !is.na(current_round) & zero_tackle_return_round == current_round ~ "medium",
+        nzchar(zero_tackle_reason) ~ "medium",
+        TRUE ~ NA_character_
+      ),
+      zero_tackle_status_text = trimws(paste(zero_tackle_reason, zero_tackle_expected_return, sep = " | "))
+    )
+
+  parsed$zero_tackle_status_text[parsed$zero_tackle_status_text == "|"] <- NA_character_
+
+  if (!is.null(player_id_lookup) && nrow(player_id_lookup)) {
+    parsed <- parsed %>%
+      left_join(
+        player_id_lookup %>%
+          mutate(name_key = normalise_name(full_name)) %>%
+          select(player_id, full_name, team_abbrev, name_key),
+        by = "name_key"
+      )
+  }
+
+  parsed
+}
+
+latest_projection_lookup <- function(squad_round_enriched, team_ids = NULL) {
+  if (is.null(squad_round_enriched) || !nrow(squad_round_enriched)) {
+    return(NULL)
+  }
+
+  working <- squad_round_enriched
+  if (!is.null(team_ids)) {
+    working <- working %>% filter(user_team_id %in% team_ids)
+  }
+
+  working %>%
+    arrange(
+      user_team_id,
+      player_id,
+      desc(!is.na(projected_score_next_3_weeks)),
+      desc(round),
+      desc(run_ts)
+    ) %>%
+    group_by(user_team_id, player_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      player_id,
+      projected_score_this_week_fallback = projected_score_this_week,
+      projected_score_next_3_weeks_fallback = projected_score_next_3_weeks,
+      projected_value_change_next_3_weeks_fallback = projected_value_change_next_3_weeks,
+      sell_urgency_fallback = sell_urgency
+    )
+}
+
+team_lookup_from_ladder <- function(ladder_history) {
+  if (is.null(ladder_history) || !nrow(ladder_history)) {
+    return(NULL)
+  }
+
+  ladder_history %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(user_team_id, team_name, coach_name, is_me)
+}
+
+pair_trade_rows <- function(players_out, players_in) {
+  max_len <- max(length(players_out), length(players_in))
+  if (max_len == 0) {
+    return(NULL)
+  }
+
+  data.frame(
+    sell_player_id = c(players_out, rep(NA_integer_, max_len - length(players_out))),
+    buy_player_id = c(players_in, rep(NA_integer_, max_len - length(players_in))),
+    stringsAsFactors = FALSE
+  )
+}
+
+build_trade_log <- function(
+  team_players_latest,
+  player_id_lookup = NULL,
+  player_price_history = NULL,
+  ladder_history = NULL,
+  actual_trade_history = NULL
+) {
+  if (is.null(team_players_latest) || !nrow(team_players_latest)) {
+    return(NULL)
+  }
+
+  roster_by_round <- team_players_latest %>%
+    distinct(user_team_id, round, player_id) %>%
+    group_by(user_team_id, round) %>%
+    summarise(player_ids = list(sort(unique(player_id))), .groups = "drop") %>%
+    arrange(user_team_id, round) %>%
+    group_by(user_team_id) %>%
+    mutate(prev_round = lag(round), prev_player_ids = lag(player_ids)) %>%
+    ungroup()
+
+  inferred_rounds <- roster_by_round %>%
+    filter(!is.na(prev_round)) %>%
+    rowwise() %>%
+    mutate(
+      players_in = list(setdiff(player_ids, prev_player_ids)),
+      players_out = list(setdiff(prev_player_ids, player_ids))
+    ) %>%
+    ungroup()
+
+  inferred_rows <- bind_rows(lapply(seq_len(nrow(inferred_rounds)), function(idx) {
+    row <- inferred_rounds[idx, ]
+    pairs <- pair_trade_rows(row$players_out[[1]], row$players_in[[1]])
+    if (is.null(pairs)) {
+      return(NULL)
+    }
+    pairs$user_team_id <- row$user_team_id[[1]]
+    pairs$round <- row$round[[1]]
+    pairs$price_round <- max(1L, row$round[[1]] - 1L)
+    pairs$trade_source <- "inferred_round_delta"
+    pairs
+  }))
+
+  actual_rows <- NULL
+  actual_rounds <- NULL
+  if (!is.null(actual_trade_history) && nrow(actual_trade_history)) {
+    actual_rows <- actual_trade_history %>%
+      transmute(
+        user_team_id,
+        round,
+        price_round = pmax(round - 1L, 1L),
+        trade_source,
+        sell_player_id,
+        buy_player_id
+      )
+    actual_rounds <- actual_rows %>% distinct(user_team_id, round)
+  }
+
+  if (!is.null(actual_rounds) && nrow(actual_rounds) && !is.null(inferred_rows) && nrow(inferred_rows)) {
+    inferred_rows <- inferred_rows %>%
+      anti_join(actual_rounds, by = c("user_team_id", "round"))
+  }
+
+  trade_log <- bind_rows(actual_rows, inferred_rows)
+  if (is.null(trade_log) || !nrow(trade_log)) {
+    return(NULL)
+  }
+
+  if (!is.null(player_id_lookup) && nrow(player_id_lookup)) {
+    trade_log <- trade_log %>%
+      left_join(
+        player_id_lookup %>%
+          select(buy_player_id = player_id, buy_player_name = full_name, buy_team_abbrev = team_abbrev),
+        by = "buy_player_id"
+      ) %>%
+      left_join(
+        player_id_lookup %>%
+          select(sell_player_id = player_id, sell_player_name = full_name, sell_team_abbrev = team_abbrev),
+        by = "sell_player_id"
+      )
+  }
+
+  if (!is.null(player_price_history) && nrow(player_price_history)) {
+    trade_log <- trade_log %>%
+      left_join(
+        player_price_history %>% select(buy_player_id = player_id, price_round = round, buy_price = price),
+        by = c("buy_player_id", "price_round")
+      ) %>%
+      left_join(
+        player_price_history %>% select(sell_player_id = player_id, price_round = round, sell_price = price),
+        by = c("sell_player_id", "price_round")
+      )
+  }
+
+  if (!is.null(ladder_history) && nrow(ladder_history)) {
+    trade_log <- trade_log %>%
+      left_join(team_lookup_from_ladder(ladder_history), by = "user_team_id")
+  }
+
+  trade_log %>% arrange(round, user_team_id, trade_source)
+}
+
+trade_round_summary <- function(trade_log) {
+  if (is.null(trade_log) || !nrow(trade_log)) {
+    return(NULL)
+  }
+
+  trade_log %>%
+    group_by(user_team_id, round) %>%
+    summarise(
+      detected_changes = n(),
+      actual_moves = sum(trade_source == "actual_api", na.rm = TRUE),
+      inferred_moves = sum(trade_source != "actual_api", na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+trade_team_summary <- function(trade_log) {
+  round_summary <- trade_round_summary(trade_log)
+  if (is.null(round_summary) || !nrow(round_summary)) {
+    return(NULL)
+  }
+
+  round_summary %>%
+    group_by(user_team_id) %>%
+    summarise(
+      cumulative_detected_changes = sum(detected_changes, na.rm = TRUE),
+      latest_trade_round = max(round, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
 next_team_fixture_lookup <- function(
     nrl_fixture_source_history,
     fixture_matchup,
@@ -358,6 +654,9 @@ build_gpt_prompt_pack <- function(
   team_round_stats_history <- read_optional_rds(file.path(data_dir, "team_round_stats_history.rds"))
   players_cf_latest <- read_optional_rds(file.path(data_dir, "players_cf_latest.rds"))
   team_players_latest <- read_optional_rds(file.path(data_dir, "team_players_latest.rds"))
+  player_id_lookup <- read_optional_rds(file.path(data_dir, "player_id_lookup.rds"))
+  player_price_history <- read_optional_rds(file.path(data_dir, "player_price_history_sc.rds"))
+  actual_trade_history <- read_optional_rds(file.path(data_dir, "actual_trade_history.rds"))
   availability_risk <- read_optional_rds(file.path(data_dir, "availability_risk_table.rds"))
   squad_round_enriched <- read_optional_rds(file.path(data_dir, "squad_round_enriched.rds"))
   cash_generation <- read_optional_rds(file.path(data_dir, "cash_generation_model.rds"))
@@ -372,7 +671,17 @@ build_gpt_prompt_pack <- function(
     stop("game_rules_round_state.rds is required to build the GPT pack.", call. = FALSE)
   }
 
-  current_round <- game_rules$current_round[[1]]
+  latest_refresh_row <- if (!is.null(source_refresh_log) && nrow(source_refresh_log)) {
+    source_refresh_log %>% arrange(desc(run_ts)) %>% slice_head(n = 1)
+  } else {
+    NULL
+  }
+
+  current_round <- dplyr::coalesce(
+    if (!is.null(latest_refresh_row) && "effective_current_round" %in% names(latest_refresh_row)) latest_refresh_row$effective_current_round[[1]] else NA_integer_,
+    if (!is.null(latest_refresh_row) && "current_round" %in% names(latest_refresh_row)) latest_refresh_row$current_round[[1]] else NA_integer_,
+    game_rules$current_round[[1]]
+  )
   next_round <- game_rules$next_round[[1]] %||% (current_round + 1L)
   generated_at <- Sys.time()
 
@@ -384,6 +693,10 @@ build_gpt_prompt_pack <- function(
   finance_snapshot <- live_team_finance(team_players_latest, master_player, ladder_history)
   structure_snapshot <- latest_team_structure(structure_health)
   team_stats_snapshot <- latest_team_round_stats(team_round_stats_history)
+  zero_tackle_injuries <- fetch_zero_tackle_injuries(player_id_lookup, current_round)
+  trade_log <- build_trade_log(team_players_latest, player_id_lookup, player_price_history, ladder_history, actual_trade_history)
+  trade_team_totals <- trade_team_summary(trade_log)
+  trade_rounds <- trade_round_summary(trade_log)
   live_fixture_lookup <- next_team_fixture_lookup(
     nrl_fixture_source_history = nrl_fixture_source_history,
     fixture_matchup = fixture_matchup
@@ -458,8 +771,13 @@ build_gpt_prompt_pack <- function(
         select(user_team_id, total_changes, trade_boosts_used),
       by = "user_team_id"
     ) %>%
+    left_join(
+      trade_team_totals,
+      by = "user_team_id"
+    ) %>%
     mutate(
       side = if_else(is_me %in% TRUE, "You", "Opponent"),
+      total_changes = coalesce(total_changes, cumulative_detected_changes, 0L),
       team_value_total_calc = fmt_money(team_value_total_calc),
       cash_end_round_calc = fmt_money(cash_end_round_calc),
       avg_projected_score_this_week = fmt_number(avg_projected_score_this_week, 1),
@@ -513,17 +831,33 @@ build_gpt_prompt_pack <- function(
     c(my_team_id, opponent_team_id)
   ) %>%
     left_join(
+      latest_projection_lookup(squad_round_enriched, c(my_team_id, opponent_team_id)),
+      by = c("user_team_id", "player_id")
+    ) %>%
+    mutate(
+      projected_score_this_week = coalesce(projected_score_this_week, projected_score_this_week_fallback),
+      projected_score_next_3_weeks = coalesce(projected_score_next_3_weeks, projected_score_next_3_weeks_fallback),
+      projected_value_change_next_3_weeks = coalesce(projected_value_change_next_3_weeks, projected_value_change_next_3_weeks_fallback),
+      sell_urgency = coalesce(sell_urgency, sell_urgency_fallback)
+    ) %>%
+    left_join(
       availability_risk %>%
         select(
           player_id,
           team_abbrev,
           risk_band,
           injury_suspension_status_text,
+          expected_return,
           played_status_display,
           locked_flag
         ),
-        by = c("player_id")
-      ) %>%
+      by = c("player_id")
+    ) %>%
+    left_join(
+      zero_tackle_injuries %>%
+        select(player_id, zero_tackle_status_text, zero_tackle_expected_return, zero_tackle_risk_band),
+      by = "player_id"
+    ) %>%
       left_join(
       live_fixture_lookup %>%
         select(
@@ -537,6 +871,14 @@ build_gpt_prompt_pack <- function(
     ) %>%
     mutate(
       side = if_else(user_team_id == my_team_id, "You", "Opponent"),
+      expected_return = coalesce(zero_tackle_expected_return, expected_return),
+      injury_suspension_status_text = coalesce(zero_tackle_status_text, injury_suspension_status_text),
+      risk_band = coalesce(zero_tackle_risk_band, risk_band),
+      display_urgency = case_when(
+        risk_band == "high" ~ "high",
+        risk_band == "medium" ~ "medium",
+        TRUE ~ coalesce(sell_urgency, "normal")
+      ),
       projected_score_this_week = projected_score_this_week,
       projected_score_next_3_weeks = projected_score_next_3_weeks,
       projected_value_change_next_3_weeks = projected_value_change_next_3_weeks
@@ -555,6 +897,7 @@ build_gpt_prompt_pack <- function(
       team = team_abbrev,
       risk_band,
       status = dplyr::coalesce(injury_suspension_status_text, played_status_display),
+      expected_return,
       currently_locked,
       projected_score_this_week
     ) %>%
@@ -572,8 +915,9 @@ build_gpt_prompt_pack <- function(
       projected_score_next_3_weeks = fmt_number(projected_score_next_3_weeks, 1),
       projected_value_change_next_3_weeks = fmt_money(projected_value_change_next_3_weeks),
       keeper_status,
-      sell_urgency,
+      sell_urgency = display_urgency,
       why = case_when(
+        !is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text) ~ injury_suspension_status_text,
         projected_value_change_next_3_weeks >= 40000 ~ "upside from form and price momentum",
         sell_urgency %in% c("high", "medium") ~ paste("urgency:", sell_urgency),
         TRUE ~ "balanced hold/watch profile"
@@ -613,6 +957,11 @@ build_gpt_prompt_pack <- function(
         select(player_id, projected_price_rise_next_round, cash_cow_maturity_status),
       by = "player_id"
     ) %>%
+      left_join(
+      zero_tackle_injuries %>%
+        select(player_id, zero_tackle_status_text),
+      by = "player_id"
+    ) %>%
     left_join(
       live_fixture_lookup %>%
         select(
@@ -636,10 +985,11 @@ build_gpt_prompt_pack <- function(
     ) %>%
     mutate(
       recent_average = coalesce(average_3_round, current_season_average, 0),
+      injury_text = coalesce(zero_tackle_status_text, injury_suspension_status_text),
       matchup_component = coalesce(next_matchup_rating, 0) / 2,
       attack_component = pmax(coalesce(attacking_trend_last_3, 0), 0) / 6,
       cash_component = coalesce(projected_price_rise_next_round, 0) / 15000,
-      risk_penalty = if_else(!is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text), 30, 0),
+      risk_penalty = if_else(!is.na(injury_text) & nzchar(injury_text), 30, 0),
       bye_penalty = if_else(bye_flag %in% TRUE, 40, 0),
       signal_score = recent_average + matchup_component + attack_component + cash_component - risk_penalty - bye_penalty
     ) %>%
@@ -657,6 +1007,7 @@ build_gpt_prompt_pack <- function(
       recent_average = fmt_number(recent_average, 1),
       next_matchup_rating = fmt_number(next_matchup_rating, 1),
       category = case_when(
+        !is.na(injury_text) & nzchar(injury_text) ~ "Injury watch",
         projected_price_rise_next_round >= 40000 & next_matchup_rating >= 35 ~ "Buy target",
         projected_price_rise_next_round < 0 & recent_average >= 75 ~ "Premium hold",
         next_matchup_rating >= 35 ~ "Fixture play",
@@ -666,6 +1017,7 @@ build_gpt_prompt_pack <- function(
       schedule_swing_indicator,
       cash_cow_maturity_status,
       why = case_when(
+        !is.na(injury_text) & nzchar(injury_text) ~ injury_text,
         projected_price_rise_next_round >= 40000 & next_matchup_rating >= 35 ~ "hot form + strong matchup + price rise",
         projected_price_rise_next_round >= 40000 ~ "hot form + price rise",
         next_matchup_rating >= 35 ~ "elite matchup next round",
@@ -676,6 +1028,11 @@ build_gpt_prompt_pack <- function(
     utils::head(16)
 
   cash_watch <- cash_generation %>%
+    left_join(
+      zero_tackle_injuries %>%
+        select(player_id, zero_tackle_status_text),
+      by = "player_id"
+    ) %>%
     left_join(
       live_fixture_lookup %>%
         select(team_abbrev, next_opponent, next_matchup_rating),
@@ -688,6 +1045,7 @@ build_gpt_prompt_pack <- function(
       next_opponent,
       current_price = fmt_money(current_price),
       category = case_when(
+        !is.na(zero_tackle_status_text) & nzchar(zero_tackle_status_text) ~ "Injury hold",
         player_classification == "cash_cow" & cash_cow_maturity_status == "rising" ~ "Cash cow upside",
         cumulative_cash_generation < 0 & current_price >= 500000 ~ "Short-term bump",
         cash_cow_maturity_status == "near_peak_or_peaked" ~ "Peak risk",
@@ -699,6 +1057,7 @@ build_gpt_prompt_pack <- function(
       cash_cow_maturity_status,
       player_classification,
       why = case_when(
+        !is.na(zero_tackle_status_text) & nzchar(zero_tackle_status_text) ~ zero_tackle_status_text,
         player_classification == "cash_cow" & cash_cow_maturity_status == "rising" ~ "still generating cash",
         cumulative_cash_generation < 0 & current_price >= 500000 ~ "price bump candidate, not a true cash cow yet",
         cash_cow_maturity_status == "near_peak_or_peaked" ~ "near peak price",
@@ -735,11 +1094,32 @@ build_gpt_prompt_pack <- function(
     arrange(side, round, desc(player_count)) %>%
     utils::head(18)
 
-  trade_behaviour <- summarise_trade_behaviour(opponent_behaviour, opponent_team_id)
-  if (is.null(trade_behaviour) || !nrow(trade_behaviour) || all(coalesce(trade_behaviour$inferred_trade_events, 0) == 0 & coalesce(trade_behaviour$actual_trade_count, 0) == 0)) {
+  trade_behaviour <- trade_rounds %>%
+    filter(user_team_id == opponent_team_id) %>%
+    arrange(desc(round)) %>%
+    transmute(round, detected_changes, actual_moves, inferred_moves)
+  if (is.null(trade_behaviour) || !nrow(trade_behaviour) || all(coalesce(trade_behaviour$detected_changes, 0) == 0)) {
     trade_behaviour <- tibble::tibble(
       note = "No detected trade deltas in saved snapshots for the current opponent yet."
     )
+  }
+
+  league_trade_log <- if (is.null(trade_log) || !nrow(trade_log)) {
+    tibble::tibble(note = "No trade rows available from actual API or round-delta inference.")
+  } else {
+    trade_log %>%
+      transmute(
+        round,
+        team = team_name,
+        coach = coach_name,
+        source = if_else(trade_source == "actual_api", "Actual API", "Inferred round delta"),
+        sell_player = sell_player_name,
+        sell_price = fmt_money(sell_price),
+        buy_player = buy_player_name,
+        buy_price = fmt_money(buy_price)
+      ) %>%
+      arrange(desc(round), team, coach) %>%
+      utils::head(24)
   }
 
   coverage_gaps <- checklist_coverage %>%
@@ -853,6 +1233,9 @@ build_gpt_prompt_pack <- function(
     "",
     "## Opponent trade behaviour",
     markdown_table(trade_behaviour, max_rows = 6),
+    "",
+    "## League-wide trade log",
+    markdown_table(league_trade_log, max_rows = 24),
     "",
     "## Long-horizon planning snapshot",
     markdown_table(long_horizon_snapshot, max_rows = 4),

@@ -1,6 +1,6 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 01:31:17 AEST
+- Generated at: 2026-04-08 02:16:40 AEST
 - League ID: 21064
 - Current round: 6
 - Latest squad pulls: you R6, opponent R5
@@ -19,7 +19,7 @@
 | side | team_name | coach_name | position | prev_round_points | current_round_points | total_points | team_value_total_calc | cash_end_round_calc | total_changes | trade_boosts_used | avg_projected_score_this_week | locked_players | dpp_players |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | You | Grog Baguettes | Greg | 11 | 942 | 0 | 5747 | $13,406,800 | $58,600 | 9 | 2 | 47.9 | 0 | 5 |
-| Opponent | Waterboys | william | 9 | 1099 | 0 | 5989 | $13,762,600 | $67,300 | 0 | 0 | 51.7 | 0 | 18 |
+| Opponent | Waterboys | william | 9 | 1099 | 0 | 5989 | $13,762,600 | $67,300 | 7 | 0 | 51.7 | 0 | 18 |
 
 ## Next SuperCoach league opponents
 | round | opponent_team | opponent_coach | current_fixture_points |
@@ -40,27 +40,33 @@
 | 8 | Hebudeh | sam | 1334 | 0 | 6166 | $13,889,500 | $18,300 |
 
 ## Availability and lockout watch
-| side | player | team | risk_band | status | currently_locked | projected_score_this_week |
-| --- | --- | --- | --- | --- | --- | --- |
-| You | Farnworth, Herbie | DOL | high | Bye Next Round | FALSE | NA |
+| side | player | team | risk_band | status | expected_return | currently_locked | projected_score_this_week |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Opponent | Walsh, Reece | BRO | high | Cheekbone / Round 11 | Round 11 | FALSE | 67.3333333333333 |
+| Opponent | Lisati, Ativalu | MEL | high | Calf / Round 7 | Round 7 | FALSE | 0 |
+| You | Farnworth, Herbie | DOL | high | Bye Next Round | NA | FALSE | 85.6666666666667 |
+| You | Walsh, Reece | BRO | high | Cheekbone / Round 11 | Round 11 | FALSE | 67.3333333333333 |
+| You | Pezet, Jonah | PAR | high | Hamstring / Round 11 | Round 11 | FALSE | 38.6666666666667 |
+| You | Howarth, Jack | MEL | medium | Hip / Round 6 | Round 6 | FALSE | 19.6666666666667 |
+| You | Leo, Moses | MEL | medium | Concussion / Round 6 | Round 6 | FALSE | 18.3333333333333 |
 
 ## Your squad leverage watch
 | player | team | next_opponent | next_matchup_rating | next_3_rounds_difficulty | schedule_swing_indicator | projected_score_next_3_weeks | projected_value_change_next_3_weeks | keeper_status | sell_urgency | why |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Haas, Payne | BRO | NQC | 18.3 | 22.9 | harder_short_term | NA | NA | keeper | normal | upside from form and price momentum |
-| Walsh, Reece | BRO | NQC | 18.3 | 22.9 | harder_short_term | NA | NA | keeper | normal | upside from form and price momentum |
-| Martin, Noah | CBR | STH | 17.3 | 20.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Sanders, Ethan | CBR | STH | 17.3 | 20.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Farnworth, Herbie | DOL | PTH | 15.0 | 21.0 | stable | NA | NA | keeper | normal | upside from form and price momentum |
-| Faeamani, Sialetili | GCT | PAR | 23.3 | 24.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Hau, Arama | GCT | PAR | 23.3 | 24.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Chan, Joe | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Fa'alogo, Sua | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | keeper | normal | upside from form and price momentum |
-| Howarth, Jack | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Leo, Moses | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Warbrick, William | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Paseka, Taniela | MNL | STG | 31.0 | 30.3 | harder_short_term | NA | NA | non_keeper | normal | upside from form and price momentum |
-| Mooney, Trey | NEW | WST | 20.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Fa'alogo, Sua | MEL | NZL | 21.3 | 21.1 | stable | 101.6 | NA | keeper | normal | upside from form and price momentum |
+| Farnworth, Herbie | DOL | PTH | 15.0 | 21.0 | stable | 82.0 | NA | keeper | high | Bye Next Round |
+| Martin, Noah | CBR | STH | 17.3 | 20.4 | stable | 75.8 | NA | non_keeper | normal | upside from form and price momentum |
+| Chan, Joe | MEL | NZL | 21.3 | 21.1 | stable | 75.8 | NA | non_keeper | normal | upside from form and price momentum |
+| Warbrick, William | MEL | NZL | 21.3 | 21.1 | stable | 71.6 | NA | non_keeper | normal | upside from form and price momentum |
+| Yeo, Isaah | PTH | BUL | 34.0 | 36.3 | stable | 71.2 | NA | non_keeper | normal | upside from form and price momentum |
+| Brailey, Blayke | SHA | SYD | 27.3 | 22.7 | easier_short_term | 69.0 | NA | non_keeper | normal | upside from form and price momentum |
+| Hau, Arama | GCT | PAR | 23.3 | 24.4 | stable | 68.8 | NA | non_keeper | normal | upside from form and price momentum |
+| Walsh, Reece | BRO | NQC | 18.3 | 22.9 | harder_short_term | 67.0 | NA | keeper | high | Cheekbone / Round 11 |
+| Haas, Payne | BRO | NQC | 18.3 | 22.9 | harder_short_term | 60.8 | NA | keeper | normal | upside from form and price momentum |
+| Tedesco, James | SYD | SHA | 22.9 | 26.1 | stable | 54.2 | NA | keeper | normal | upside from form and price momentum |
+| Colquhoun, Jesse | SHA | SYD | 27.3 | 22.7 | easier_short_term | 53.2 | NA | non_keeper | normal | upside from form and price momentum |
+| Moses, Mitchell | PAR | GCT | 23.3 | 22.1 | stable | 50.2 | NA | non_keeper | normal | upside from form and price momentum |
+| Fifita, David | STH | CBR | 26.3 | 32.3 | harder_short_term | 49.4 | NA | non_keeper | normal | upside from form and price momentum |
 
 ## Opponent squad profile
 | player | team | next_opponent | next_matchup_rating | projected_score_next_3_weeks | risk_band | currently_locked |
@@ -75,7 +81,7 @@
 | Carrigan, Patrick | BRO | NQC | 18.3 | 70.0 | low | FALSE |
 | Brailey, Blayke | SHA | SYD | 27.3 | 69.0 | low | FALSE |
 | Hau, Arama | GCT | PAR | 23.3 | 68.8 | low | FALSE |
-| Walsh, Reece | BRO | NQC | 18.3 | 67.0 | low | FALSE |
+| Walsh, Reece | BRO | NQC | 18.3 | 67.0 | high | FALSE |
 | Stonestreet, Sam | SHA | SYD | 27.3 | 55.2 | low | FALSE |
 | To'o, Brian | PTH | BUL | 34.0 | 54.4 | low | FALSE |
 | Colquhoun, Jesse | SHA | SYD | 27.3 | 53.2 | low | FALSE |
@@ -104,7 +110,7 @@
 | player | team | next_opponent | current_price | category | projected_price_rise_next_round | cumulative_cash_generation | cash_cow_maturity_status | player_classification | why |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Halangahu, Jacob | STG | MNL | $334,800 | Cash cow upside | $89,490 | $0 | rising | cash_cow | still generating cash |
-| Best, Bradman | NEW | WST | $573,900 | Monitor | $87,203 | $-82,900 | rising | stepping_stone | monitor price cycle |
+| Best, Bradman | NEW | WST | $573,900 | Injury hold | $87,203 | $-82,900 | rising | stepping_stone | Groin / Round 10 |
 | Garlick, Bronson | STH | CBR | $268,400 | Monitor | $86,820 | $-87,400 | rising | stepping_stone | monitor price cycle |
 | Mooney, Trey | NEW | WST | $475,700 | Monitor | $86,731 | $33,700 | rising | stepping_stone | monitor price cycle |
 | Hopoi, Lipoi | BUL | PTH | $309,000 | Cash cow upside | $85,688 | $0 | rising | cash_cow | still generating cash |
@@ -141,9 +147,40 @@
 | Opponent | 7 | BRO | WST | 2 | away | high | 21.5 | 21.5 | stable |
 
 ## Opponent trade behaviour
-| note |
-| --- |
-| No detected trade deltas in saved snapshots for the current opponent yet. |
+| round | detected_changes | actual_moves | inferred_moves |
+| --- | --- | --- | --- |
+| 5 | 2 | 0 | 2 |
+| 4 | 1 | 0 | 1 |
+| 3 | 2 | 0 | 2 |
+| 2 | 2 | 0 | 2 |
+
+## League-wide trade log
+| round | team | coach | source | sell_player | sell_price | buy_player | buy_price |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 5 | Crows | sam | Inferred round delta | Crichton, Stephen | $588,500 | Sasagi, Simi | $528,600 |
+| 5 | Get That India | Johnny | Inferred round delta | Walker, Sam | $552,700 | Twal, Alex | $548,600 |
+| 5 | Gordonites  | Daniel | Inferred round delta | Leo, Moses | $317,500 | Walsh, Reece | $790,100 |
+| 5 | Gordonites  | Daniel | Inferred round delta | Ioelu, Benaiah | $248,900 | Smith, Brandon | $235,600 |
+| 5 | Gordonites  | Daniel | Inferred round delta | Tedesco, James | $754,700 | Tavana, Faaletino | $201,400 |
+| 5 | Grog Baguettes | Greg | Actual API | Flegler, Thomas | $353,400 | Rudolf, Toby | $318,900 |
+| 5 | Grog Baguettes | Greg | Actual API | Mahoney, Reed | $381,400 | Mamouzelos, Peter | $465,700 |
+| 5 | Hebudeh | sam | Inferred round delta | Leo, Moses | $317,500 | Sasagi, Simi | $528,600 |
+| 5 | Hebudeh | sam | Inferred round delta | Yeo, Isaah | $641,300 | Luki, Heilum | $508,900 |
+| 5 | Jerky Turkeys | Joe | Inferred round delta | Kini, Keano | $523,000 | Walsh, Reece | $790,100 |
+| 5 | Jerky Turkeys | Joe | Inferred round delta | Mooney, Trey | $483,300 | Hau, Arama | $421,600 |
+| 5 | Magnetic cucumbers | Daniel | Inferred round delta | Moses, Mitchell | $505,200 | Burton, Matt | $586,700 |
+| 5 | Magnetic cucumbers | Daniel | Inferred round delta | Pezet, Jonah | $365,900 | Hau, Arama | $421,600 |
+| 5 | Magnetic cucumbers | Daniel | Inferred round delta | Walker, Cody | $434,600 | Reed, Kade | $201,400 |
+| 5 | Slewisbrah RLFC | Lewis | Inferred round delta | Crichton, Stephen | $588,500 | Walsh, Reece | $790,100 |
+| 5 | Slewisbrah RLFC | Lewis | Inferred round delta | Kini, Keano | $523,000 | Sasagi, Simi | $528,600 |
+| 5 | Spearmint Rhinos | Zaine | Inferred round delta | Crichton, Stephen | $588,500 | Sasagi, Simi | $528,600 |
+| 5 | Spearmint Rhinos | Zaine | Inferred round delta | Kini, Keano | $523,000 | Finefeuiaki, Kulikefu | $621,200 |
+| 5 | Spearmint Rhinos | Zaine | Inferred round delta | Yeo, Isaah | $641,300 | Trbojevic, Tom | $727,400 |
+| 5 | Waterboys | william | Inferred round delta | Leo, Moses | $317,500 | Walsh, Reece | $790,100 |
+| 5 | Waterboys | william | Inferred round delta | Trbojevic, Tom | $727,400 | Hunt, Fletcher | $373,700 |
+| 5 | WoodDucks | Craig | Inferred round delta | Kini, Keano | $523,000 | Walsh, Reece | $790,100 |
+| 5 | WoodDucks | Craig | Inferred round delta | To'o, Brian | $563,900 | Sasagi, Simi | $528,600 |
+| 4 | Crows | sam | Inferred round delta | Lisati, Ativalu | $269,400 | Chan, Joe | $444,100 |
 
 ## Long-horizon planning snapshot
 | team_name | coach_name | current_round | current_squad_value | projected_score_next_3_weeks | trades_remaining | boosts_remaining | finals_round | next_bye_rounds |
