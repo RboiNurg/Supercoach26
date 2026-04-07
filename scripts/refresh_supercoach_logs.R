@@ -55,6 +55,7 @@ refresh_supercoach_logs <- function() {
     league_id = integer(),
     user_team_id = integer(),
     round = integer(),
+    change_origin = character(),
     players_out = list(),
     players_in = list(),
     players_out_n = integer(),
@@ -904,11 +905,12 @@ refresh_supercoach_logs <- function() {
   inferred_changes_new <- current_membership %>%
     left_join(previous_membership, by = c("user_team_id", "round", "from_run_ts" = "prev_run_ts")) %>%
     mutate(
+      is_initial_snapshot = is.na(from_run_ts),
       prev_players = map(prev_players, ~ if (is.null(.x)) tibble(player_id = integer()) else .x),
       players_in_tbl = map2(current_players, prev_players, ~ anti_join(.x, .y, by = "player_id")),
       players_out_tbl = map2(prev_players, current_players, ~ anti_join(.x, .y, by = "player_id")),
-      players_in = map(players_in_tbl, ~ .x$player_id),
-      players_out = map(players_out_tbl, ~ .x$player_id),
+      players_in = map2(players_in_tbl, is_initial_snapshot, ~ if (.y) integer() else .x$player_id),
+      players_out = map2(players_out_tbl, is_initial_snapshot, ~ if (.y) integer() else .x$player_id),
       players_in_n = map_int(players_in, length),
       players_out_n = map_int(players_out, length),
       inferred_trade_pairs = map2(players_out, players_in, pair_inferred_trades)
@@ -920,6 +922,7 @@ refresh_supercoach_logs <- function() {
       league_id = league_id,
       user_team_id,
       round,
+      change_origin = if_else(is_initial_snapshot, "initial_snapshot", "snapshot_delta"),
       players_out,
       players_in,
       players_out_n,

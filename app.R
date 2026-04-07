@@ -130,6 +130,7 @@ load_dashboard_data <- function() {
     opponent_behaviour = read_required_rds(file.path(data_dir, "opponent_behaviour_history.rds")),
     fixture_matchup = read_required_rds(file.path(data_dir, "fixture_matchup_table.rds")),
     team_performance = read_required_rds(file.path(data_dir, "team_performance_context.rds")),
+    nrl_fixture_source_history = read_required_rds(file.path(data_dir, "nrl_fixture_source_history.rds")),
     source_refresh_log = read_required_rds(file.path(data_dir, "source_refresh_log.rds")),
     team_round_stats_history = read_required_rds(file.path(data_dir, "team_round_stats_history.rds")),
     players_cf_latest = read_required_rds(file.path(data_dir, "players_cf_latest.rds")),
@@ -147,169 +148,497 @@ load_dashboard_data <- function() {
   )
 }
 
+infer_effective_round_from_nrl <- function(
+  game_rules,
+  nrl_fixture_source_history,
+  now = Sys.time(),
+  season_rounds = 1:27,
+  close_buffer_hours = 3
+) {
+  settings_current_round <- if (!is.null(game_rules) && nrow(game_rules) > 0 && "current_round" %in% names(game_rules)) {
+    suppressWarnings(as.integer(game_rules$current_round[[1]]))
+  } else {
+    NA_integer_
+  }
+  settings_round_explicit <- if (!is.null(game_rules) && nrow(game_rules) > 0 && "settings_current_round" %in% names(game_rules)) {
+    suppressWarnings(as.integer(game_rules$settings_current_round[[1]]))
+  } else {
+    settings_current_round
+  }
+  settings_next_round <- if (!is.null(game_rules) && nrow(game_rules) > 0 && "next_round" %in% names(game_rules)) {
+    suppressWarnings(as.integer(game_rules$next_round[[1]]))
+  } else {
+    NA_integer_
+  }
+
+  if (is.null(nrl_fixture_source_history) || nrow(nrl_fixture_source_history) == 0) {
+    return(list(
+      current_round = settings_current_round,
+      next_round = settings_next_round %||% (settings_current_round + 1L),
+      settings_current_round = settings_round_explicit,
+      round_inference_source = "settings_only",
+      round_closed_through_utc = as.POSIXct(NA, tz = "UTC")
+    ))
+  }
+
+  kickoff_col <- if ("kickoff_at_utc" %in% names(nrl_fixture_source_history)) "kickoff_at_utc" else if ("kickoff_utc" %in% names(nrl_fixture_source_history)) "kickoff_utc" else NULL
+  state_col <- if ("match_state" %in% names(nrl_fixture_source_history)) "match_state" else if ("match_status" %in% names(nrl_fixture_source_history)) "match_status" else NULL
+  fixture_tbl <- nrl_fixture_source_history
+
+  if (!"fixture_key" %in% names(fixture_tbl)) {
+    team_col <- if ("team_abbrev" %in% names(fixture_tbl)) fixture_tbl$team_abbrev else rep(NA_character_, nrow(fixture_tbl))
+    opponent_col <- if ("opponent_abbrev" %in% names(fixture_tbl)) fixture_tbl$opponent_abbrev else rep(NA_character_, nrow(fixture_tbl))
+    fixture_tbl$fixture_key <- paste(
+      fixture_tbl$round,
+      team_col,
+      opponent_col,
+      sep = "::"
+    )
+  }
+
+  fixture_level <- fixture_tbl %>%
+    filter(!bye_flag %in% TRUE, !is.na(round)) %>%
+    mutate(
+      kickoff_value = if (!is.null(kickoff_col)) as.POSIXct(.data[[kickoff_col]], tz = "UTC") else as.POSIXct(NA, tz = "UTC"),
+      match_state_norm = if (!is.null(state_col)) tolower(trimws(as.character(.data[[state_col]]))) else NA_character_
+    ) %>%
+    group_by(round, fixture_key) %>%
+    slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(
+      close_cutoff_utc = kickoff_value + close_buffer_hours * 60 * 60,
+      fixture_closed = case_when(
+        match_state_norm %in% c("fulltime", "full time", "post", "completed", "complete") ~ TRUE,
+        !is.na(close_cutoff_utc) & as.POSIXct(now, tz = "UTC") >= close_cutoff_utc ~ TRUE,
+        TRUE ~ FALSE
+      )
+    )
+
+  round_completion <- fixture_level %>%
+    group_by(round) %>%
+    summarise(
+      fixtures_n = n(),
+      closed_fixtures_n = sum(fixture_closed, na.rm = TRUE),
+      round_closed = fixtures_n > 0 & closed_fixtures_n == fixtures_n,
+      round_closed_through_utc = suppressWarnings(max(close_cutoff_utc, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      round_closed_through_utc = if_else(
+        is.infinite(round_closed_through_utc),
+        as.POSIXct(NA, tz = "UTC"),
+        round_closed_through_utc
+      )
+    )
+
+  latest_closed_round <- round_completion %>%
+    filter(round_closed %in% TRUE) %>%
+    arrange(desc(round)) %>%
+    slice_head(n = 1)
+
+  inferred_current_round <- if (nrow(latest_closed_round) == 0) {
+    settings_current_round
+  } else {
+    min(max(season_rounds, na.rm = TRUE), latest_closed_round$round[[1]] + 1L)
+  }
+
+  effective_current_round <- max(settings_current_round, inferred_current_round, na.rm = TRUE)
+  effective_next_round <- if (!is.na(settings_next_round) && effective_current_round == settings_current_round) {
+    settings_next_round
+  } else if (effective_current_round >= max(season_rounds, na.rm = TRUE)) {
+    NA_integer_
+  } else {
+    effective_current_round + 1L
+  }
+
+  list(
+    current_round = effective_current_round,
+    next_round = effective_next_round,
+    settings_current_round = settings_round_explicit,
+    round_inference_source = if (effective_current_round > settings_round_explicit) "nrl_fixture_completion" else "settings",
+    round_closed_through_utc = if (nrow(latest_closed_round) == 0) as.POSIXct(NA, tz = "UTC") else latest_closed_round$round_closed_through_utc[[1]]
+  )
+}
+
+sanitize_price_signal <- function(
+  projected_delta,
+  current_price,
+  last_change,
+  recent_average = NA_real_,
+  season_average = NA_real_
+) {
+  plausible_cap <- pmax(90000, pmin(140000, current_price * 0.12))
+  raw_is_plausible <- !is.na(projected_delta) &
+    !is.na(current_price) &
+    !is.infinite(projected_delta) &
+    abs(projected_delta) <= plausible_cap
+
+  form_component <- pmin(pmax(coalesce(recent_average, season_average, 0) - coalesce(season_average, recent_average, 0), -30), 30) * 2500
+  last_change_component <- pmin(pmax(coalesce(last_change, 0) * 0.7, -80000), 80000)
+  heuristic_delta <- pmin(pmax(last_change_component + form_component, -90000), 90000)
+
+  if_else(raw_is_plausible, projected_delta, heuristic_delta)
+}
+
+latest_round_at_or_before <- function(tbl, round_limit) {
+  if (is.null(tbl) || !"round" %in% names(tbl) || nrow(tbl) == 0 || is.na(round_limit)) {
+    return(NA_integer_)
+  }
+
+  rounds <- suppressWarnings(as.integer(tbl$round))
+  rounds <- rounds[!is.na(rounds) & rounds <= round_limit]
+  if (length(rounds) == 0) {
+    return(NA_integer_)
+  }
+  max(rounds)
+}
+
 theme_sc <- bs_theme(
   version = 5,
-  bg = "#f7f3ea",
-  fg = "#1b1a17",
-  primary = "#8a5a00",
-  secondary = "#24434d",
-  success = "#2f6f4f",
-  base_font = font_google("DM Sans"),
-  heading_font = font_google("Space Grotesk")
+  bg = "#f4f1e8",
+  fg = "#14231c",
+  primary = "#0b6b3a",
+  secondary = "#103f5c",
+  success = "#198754",
+  base_font = font_google("Manrope"),
+  heading_font = font_google("Oswald")
 )
 
 metric_card <- function(title, output_id, subtitle = NULL) {
   card(
-    class = "shadow-sm border-0 h-100",
+    class = "sc-card metric-card",
     div(
       class = "card-body",
-      tags$div(class = "text-muted text-uppercase small", title),
-      tags$div(class = "display-6 fw-bold", textOutput(output_id)),
-      if (!is.null(subtitle)) tags$div(class = "small text-muted mt-2", subtitle)
+      tags$div(class = "metric-label", title),
+      tags$div(class = "metric-value", textOutput(output_id)),
+      if (!is.null(subtitle)) tags$div(class = "metric-subtitle", subtitle)
     )
   )
 }
 
 responsive_table <- function(output_id) {
-  div(class = "table-responsive", tableOutput(output_id))
+  div(class = "table-wrap", tableOutput(output_id))
 }
 
 ui <- page_navbar(
-  title = "SuperCoach HQ",
+  title = "SuperCoach War Room",
   theme = theme_sc,
-  bg = "#efe3c5",
+  bg = "#0f2e23",
   inverse = FALSE,
   header = tags$head(
     tags$style(HTML("
-      .bslib-card { border-radius: 20px; }
-      .display-6 { font-size: 1.7rem; }
-      .section-note { color: #5f5a4e; }
-      .table-responsive { overflow-x: auto; }
-      pre { white-space: pre-wrap; word-break: break-word; }
-      .app-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+      body {
+        background:
+          linear-gradient(180deg, rgba(11,107,58,0.08), rgba(244,241,232,0.96) 180px),
+          repeating-linear-gradient(
+            180deg,
+            rgba(11,107,58,0.03) 0px,
+            rgba(11,107,58,0.03) 22px,
+            rgba(255,255,255,0.0) 22px,
+            rgba(255,255,255,0.0) 44px
+          ),
+          #f4f1e8;
+      }
+      .navbar { box-shadow: 0 10px 28px rgba(6, 35, 26, 0.18); }
+      .navbar-brand, .nav-link {
+        font-family: 'Oswald', sans-serif;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .bslib-page-nav {
+        max-width: 1120px;
+        margin: 0 auto;
+      }
+      .bslib-page-nav .tab-content {
+        padding-top: 1rem;
+      }
+      .hero-card {
+        background: linear-gradient(135deg, #103f5c 0%, #0b6b3a 100%);
+        color: #f8f6ef;
+        border: 0;
+        border-radius: 28px;
+        box-shadow: 0 20px 40px rgba(7, 43, 32, 0.22);
+        margin-bottom: 1rem;
+      }
+      .hero-kicker {
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        opacity: 0.82;
+        margin-bottom: 0.45rem;
+      }
+      .hero-title {
+        font-family: 'Oswald', sans-serif;
+        font-size: 2.2rem;
+        line-height: 1.05;
+        margin-bottom: 0.55rem;
+      }
+      .hero-copy, .hero-note {
+        font-size: 0.98rem;
+        max-width: 760px;
+        opacity: 0.92;
+      }
+      .hero-note {
+        margin-top: 0.75rem;
+        font-weight: 700;
+      }
+      .action-bar {
+        display: flex;
+        gap: 0.8rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+      }
+      .btn-sc, .btn-sc-outline {
+        border-radius: 999px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 0.8rem 1.25rem;
+        transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+      }
+      .btn-sc {
+        background: #f4b63f;
+        border: 0;
+        color: #112018;
+        box-shadow: 0 10px 24px rgba(244, 182, 63, 0.25);
+      }
+      .btn-sc:hover, .btn-sc:focus {
+        background: #ffc857;
+        color: #112018;
+        transform: translateY(-1px);
+        box-shadow: 0 14px 28px rgba(244, 182, 63, 0.3);
+      }
+      .btn-sc:active, .btn-sc-outline:active, .btn-sc.clicked, .btn-sc-outline.clicked {
+        transform: scale(0.97);
+      }
+      .btn-sc-outline {
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.3);
+        color: #f8f6ef;
+      }
+      .btn-sc-outline:hover, .btn-sc-outline:focus {
+        background: rgba(255,255,255,0.18);
+        color: #ffffff;
+      }
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.85rem;
+        margin-bottom: 1rem;
+      }
+      .metric-card {
+        min-height: 138px;
+      }
+      .sc-card {
+        border: 0;
+        border-radius: 24px;
+        background: rgba(255,255,255,0.92);
+        box-shadow: 0 16px 34px rgba(18, 44, 33, 0.1);
+        margin-bottom: 1rem;
+        overflow: hidden;
+      }
+      .sc-card .card-header {
+        background: linear-gradient(90deg, rgba(16,63,92,0.08), rgba(11,107,58,0.05));
+        border-bottom: 1px solid rgba(16,63,92,0.08);
+        color: #0f2e23;
+        font-family: 'Oswald', sans-serif;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+      .metric-label {
+        color: #567569;
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .metric-value {
+        font-family: 'Oswald', sans-serif;
+        font-size: 2rem;
+        line-height: 1;
+        margin-top: 0.55rem;
+        color: #0f2e23;
+      }
+      .metric-subtitle, .section-note {
+        color: #56645c;
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+      }
+      .section-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      .table {
+        margin-bottom: 0;
+      }
+      .table th {
+        font-family: 'Oswald', sans-serif;
+        letter-spacing: 0.02em;
+      }
+      .shiny-notification {
+        border-radius: 16px;
+        box-shadow: 0 18px 32px rgba(15, 46, 35, 0.22);
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #f8f6ef;
+        border-radius: 16px;
+        padding: 1rem;
+      }
+      @media (max-width: 900px) {
+        .hero-title { font-size: 1.75rem; }
+      }
+    ")),
+    tags$script(HTML("
+      document.addEventListener('click', function(evt) {
+        if (!evt.target.classList.contains('btn-sc') && !evt.target.classList.contains('btn-sc-outline')) return;
+        evt.target.classList.add('clicked');
+        window.setTimeout(function() { evt.target.classList.remove('clicked'); }, 220);
+      });
     "))
   ),
   nav_panel(
     "Overview",
-    div(
-      class = "app-actions",
-      actionButton("refresh_app_data", "Refresh From Storage", class = "btn btn-primary")
+    card(
+      class = "hero-card",
+      card_body(
+        tags$div(class = "hero-kicker", "Live league pulse"),
+        tags$div(class = "hero-title", "Scan the week fast, then send the real pack to GPT."),
+        tags$div(class = "hero-copy", "This board is for quick speculation, freshness checks, and matchup feel. The heavier decision logic still belongs in your exported weekly prompt pack."),
+        div(
+          class = "action-bar",
+          actionButton("refresh_app_data", "Refresh From Storage", class = "btn-sc"),
+          downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn-sc-outline")
+        ),
+        tags$div(class = "hero-note", textOutput("snapshot_status_text"))
+      )
     ),
-    layout_column_wrap(
-      width = 1/4,
+    div(
+      class = "metric-grid",
       metric_card("Current Round", "current_round_text"),
+      metric_card("Snapshot Round", "snapshot_round_text"),
       metric_card("Last Refresh", "last_refresh_text"),
       metric_card("Current Matchup", "matchup_text"),
       metric_card("Latest GPT Pack", "latest_export_text")
     ),
     card(
-      full_screen = TRUE,
+      class = "sc-card",
       card_header("League Financial Snapshot"),
       plotOutput("league_finance_plot", height = "360px"),
       card_footer(class = "section-note", "Squad value vs cash balance, with projected weekly strength shown by bubble size.")
     ),
     card(
+      class = "sc-card",
       card_header("Fixture Runway"),
       plotOutput("fixture_runway_plot", height = "340px"),
       card_footer(class = "section-note", "Next five rounds of official NRL fixture difficulty for your side and this week's opponent.")
     ),
     card(
+      class = "sc-card",
       card_header("League Schedule Window"),
       responsive_table("league_schedule_table")
     )
   ),
   nav_panel(
     "Matchup",
-    layout_column_wrap(
-      width = 1/2,
+    div(
+      class = "section-stack",
       card(
+        class = "sc-card",
         card_header("Head-to-Head Comparison"),
         plotOutput("matchup_compare_plot", height = "360px")
       ),
       card(
+        class = "sc-card",
         card_header("Opponent Fingerprint"),
         responsive_table("opponent_profile_table")
-      )
-    ),
-    layout_column_wrap(
-      width = 1/2,
+      ),
       card(
+        class = "sc-card",
         card_header("Your Availability Watch"),
         responsive_table("your_availability_table")
       ),
       card(
+        class = "sc-card",
         card_header("Opponent Availability Watch"),
         responsive_table("opponent_availability_table")
-      )
-    ),
-    layout_column_wrap(
-      width = 1/2,
+      ),
       card(
+        class = "sc-card",
         card_header("Opponent Trade Timeline"),
         plotOutput("opponent_trade_plot", height = "320px")
       ),
       card(
+        class = "sc-card",
         card_header("NRL Club Exposure"),
         plotOutput("club_exposure_plot", height = "320px")
       )
-    )
+    ),
   ),
   nav_panel(
     "Signals",
-    layout_column_wrap(
-      width = 1/2,
+    div(
+      class = "section-stack",
       card(
+        class = "sc-card",
         card_header("Your Squad Leverage Watch"),
         responsive_table("your_signal_table")
       ),
       card(
+        class = "sc-card",
         card_header("Next-Round Market Watchlist"),
         responsive_table("market_watch_table")
-      )
-    ),
-    layout_column_wrap(
-      width = 1/2,
+      ),
       card(
+        class = "sc-card",
         card_header("Cash Generation Radar"),
         responsive_table("cash_watch_table")
       ),
       card(
+        class = "sc-card",
         card_header("NRL Context Watch"),
         responsive_table("nrl_context_table")
+      ),
+      card(
+        class = "sc-card",
+        card_header("NRL Trend Radar"),
+        plotOutput("team_performance_plot", height = "360px"),
+        card_footer(class = "section-note", "Attacking trend lines for the NRL clubs most represented in this week's head-to-head.")
       )
-    ),
-    card(
-      card_header("NRL Trend Radar"),
-      plotOutput("team_performance_plot", height = "360px"),
-      card_footer(class = "section-note", "Attacking trend lines for the NRL clubs most represented in this week's head-to-head.")
     )
   ),
   nav_panel(
     "League",
     card(
+      class = "sc-card",
       card_header("League Table"),
       responsive_table("league_snapshot_table")
     ),
-    layout_column_wrap(
-      width = 1/2,
-      card(
-        card_header("Refresh Log"),
-        responsive_table("source_health_table")
-      ),
-      card(
-        card_header("Coverage Gaps"),
-        responsive_table("coverage_gap_table")
-      )
+    card(
+      class = "sc-card",
+      card_header("Refresh Log"),
+      responsive_table("source_health_table")
+    ),
+    card(
+      class = "sc-card",
+      card_header("Coverage Gaps"),
+      responsive_table("coverage_gap_table")
     )
   ),
   nav_panel(
     "Export",
     div(
-      class = "app-actions",
-      actionButton("build_prompt_pack", "Build GPT Pack", class = "btn btn-primary"),
-      downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn btn-outline-secondary")
+      class = "action-bar",
+      actionButton("build_prompt_pack", "Build GPT Pack", class = "btn-sc"),
+      downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn-sc-outline")
     ),
     card(
+      class = "sc-card",
       card_header("Export Status"),
       div(
         class = "card-body",
@@ -317,18 +646,18 @@ ui <- page_navbar(
         tags$div(class = "small text-muted mt-2", "This pack is meant for your custom GPT. The dashboard is for scanning, not final reasoning.")
       )
     ),
-    layout_column_wrap(
-      width = 1/2,
-      card(
-        card_header("Origin Watch"),
-        responsive_table("origin_watch_table")
-      ),
-      card(
-        card_header("Weekly Notes"),
-        verbatimTextOutput("weekly_notes_text")
-      )
+    card(
+      class = "sc-card",
+      card_header("Origin Watch"),
+      responsive_table("origin_watch_table")
     ),
     card(
+      class = "sc-card",
+      card_header("Weekly Notes"),
+      verbatimTextOutput("weekly_notes_text")
+    ),
+    card(
+      class = "sc-card",
       card_header("GPT Pack Preview"),
       verbatimTextOutput("prompt_pack_preview")
     )
@@ -343,6 +672,7 @@ server <- function(input, output, session) {
     sync_from_drive_if_needed(force = TRUE)
     refresh_nonce(Sys.time())
     prompt_status("Dashboard data refreshed from storage.")
+    showNotification("Dashboard refreshed from Drive/storage.", type = "message", duration = 4)
   })
 
   observeEvent(input$build_prompt_pack, {
@@ -369,6 +699,7 @@ server <- function(input, output, session) {
         format(result$generated_at, tz = "Australia/Sydney", usetz = TRUE)
       )
     )
+    showNotification("GPT pack rebuilt and synced.", type = "message", duration = 4)
   })
 
   dashboard_data <- reactive({
@@ -376,25 +707,60 @@ server <- function(input, output, session) {
     load_dashboard_data()
   })
 
-  current_round <- reactive({
-    data <- dashboard_data()
-    if (is.null(data$game_rules) || nrow(data$game_rules) == 0) {
-      return(NA_integer_)
+  cash_generation_clean <- reactive({
+    df <- dashboard_data()$cash_generation
+    if (is.null(df) || nrow(df) == 0) {
+      return(df)
     }
-    data$game_rules$current_round[[1]]
+
+    if (!"projected_price_signal_next_round" %in% names(df)) {
+      df$projected_price_signal_next_round <- NA_real_
+    }
+
+    df %>%
+      mutate(
+        projected_price_signal_next_round = sanitize_price_signal(
+          projected_delta = coalesce(projected_price_signal_next_round, projected_price_rise_next_round),
+          current_price = current_price,
+          last_change = price_change_last_round
+        )
+      )
+  })
+
+  round_state <- reactive({
+    data <- dashboard_data()
+    infer_effective_round_from_nrl(
+      game_rules = data$game_rules,
+      nrl_fixture_source_history = data$nrl_fixture_source_history
+    )
+  })
+
+  current_round <- reactive({
+    round_state()$current_round
   })
 
   next_round <- reactive({
+    round_state()$next_round %||% (current_round() + 1L)
+  })
+
+  snapshot_round <- reactive({
     data <- dashboard_data()
-    if (is.null(data$game_rules) || nrow(data$game_rules) == 0) {
+    available_rounds <- c(
+      if (!is.null(data$fixtures_history) && "round" %in% names(data$fixtures_history)) data$fixtures_history$round else integer(),
+      if (!is.null(data$ladder_history) && "round" %in% names(data$ladder_history)) data$ladder_history$round else integer(),
+      if (!is.null(data$team_players_latest) && "round" %in% names(data$team_players_latest)) data$team_players_latest$round else integer()
+    )
+    available_rounds <- suppressWarnings(as.integer(available_rounds))
+    available_rounds <- available_rounds[!is.na(available_rounds) & available_rounds <= current_round()]
+    if (length(available_rounds) == 0) {
       return(NA_integer_)
     }
-    data$game_rules$next_round[[1]] %||% (current_round() + 1L)
+    max(available_rounds)
   })
 
   latest_ladder_round <- reactive({
     data <- dashboard_data()
-    round_value <- current_round()
+    round_value <- snapshot_round()
     req(!is.null(data$ladder_history), !is.na(round_value))
 
     data$ladder_history %>%
@@ -415,7 +781,7 @@ server <- function(input, output, session) {
   })
 
   current_matchup <- reactive({
-    round_value <- current_round()
+    round_value <- snapshot_round()
     req(!is.na(round_value))
 
     my_team_id <- latest_ladder_round() %>%
@@ -464,7 +830,7 @@ server <- function(input, output, session) {
     ladder <- latest_ladder_round()
     structure <- dashboard_data()$structure_health
     team_round_stats <- dashboard_data()$team_round_stats_history
-    round_value <- current_round()
+    round_value <- snapshot_round()
     matchup <- current_matchup()
 
     summary_tbl <- ladder %>%
@@ -502,7 +868,7 @@ server <- function(input, output, session) {
   current_squad_signals <- reactive({
     data <- dashboard_data()
     matchup <- current_matchup()
-    round_value <- current_round()
+    round_value <- snapshot_round()
     next_round_value <- next_round()
 
     req(
@@ -539,8 +905,8 @@ server <- function(input, output, session) {
         by = "team_abbrev"
       ) %>%
       left_join(
-        data$cash_generation %>%
-          select(player_id, projected_price_rise_next_round, cumulative_cash_generation),
+        cash_generation_clean() %>%
+          select(player_id, projected_price_signal_next_round, cumulative_cash_generation),
         by = "player_id"
       ) %>%
       mutate(
@@ -552,7 +918,7 @@ server <- function(input, output, session) {
         ),
         signal_score = coalesce(projected_score_next_3_weeks, 0) / 12 +
           coalesce(next_matchup_rating, 0) / 2 +
-          coalesce(projected_price_rise_next_round, 0) / 15000 -
+          coalesce(projected_price_signal_next_round, 0) / 15000 -
           risk_weight * 3 -
           if_else(bye_flag %in% TRUE, 8, 0)
       )
@@ -585,8 +951,8 @@ server <- function(input, output, session) {
         by = "player_id"
       ) %>%
       left_join(
-        data$cash_generation %>%
-          select(player_id, projected_price_rise_next_round, cash_cow_maturity_status),
+        cash_generation_clean() %>%
+          select(player_id, projected_price_signal_next_round, cash_cow_maturity_status),
         by = "player_id"
       ) %>%
       left_join(
@@ -612,7 +978,7 @@ server <- function(input, output, session) {
         signal_score = recent_average +
           coalesce(next_matchup_rating, 0) / 2 +
           pmax(coalesce(attacking_trend_last_3, 0), 0) / 6 +
-          coalesce(projected_price_rise_next_round, 0) / 15000 -
+          coalesce(projected_price_signal_next_round, 0) / 15000 -
           if_else(bye_flag %in% TRUE, 40, 0) -
           if_else(!is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text), 25, 0)
       ) %>%
@@ -628,7 +994,7 @@ server <- function(input, output, session) {
         next_opponent,
         recent_average = round(recent_average, 1),
         matchup = round(next_matchup_rating, 1),
-        projected_rise = dollar(projected_price_rise_next_round),
+        price_signal = dollar(projected_price_signal_next_round),
         swing = schedule_swing_indicator,
         maturity = cash_cow_maturity_status
       ) %>%
@@ -641,20 +1007,20 @@ server <- function(input, output, session) {
 
     req(!is.null(data$cash_generation), !is.null(data$players_cf_latest), !is.null(data$fixture_matchup))
 
-    data$cash_generation %>%
+    cash_generation_clean() %>%
       left_join(
         data$fixture_matchup %>%
           filter(round == next_round_value) %>%
           select(team_abbrev, next_opponent = opponent),
         by = "team_abbrev"
       ) %>%
-      arrange(desc(projected_price_rise_next_round)) %>%
+      arrange(desc(projected_price_signal_next_round)) %>%
       transmute(
         player = full_name,
         team = team_abbrev,
         next_opponent,
         current_price = dollar(current_price),
-        next_rise = dollar(projected_price_rise_next_round),
+        next_signal = dollar(projected_price_signal_next_round),
         total_cash = dollar(cumulative_cash_generation),
         maturity = cash_cow_maturity_status
       ) %>%
@@ -684,6 +1050,7 @@ server <- function(input, output, session) {
       transmute(
         run_ts = format(run_ts, tz = "Australia/Sydney", usetz = TRUE),
         settings_current_round = if ("settings_current_round" %in% names(.)) settings_current_round else NA_integer_,
+        effective_current_round = if ("effective_current_round" %in% names(.)) effective_current_round else current_round,
         current_round,
         round_inference_source = if ("round_inference_source" %in% names(.)) round_inference_source else NA_character_,
         mutable_rounds,
@@ -696,30 +1063,44 @@ server <- function(input, output, session) {
   })
 
   output$current_round_text <- renderText({
-    data <- dashboard_data()
     round_value <- current_round()
 
     if (is.na(round_value)) {
       return("NA")
     }
 
-    settings_round <- if (!is.null(data$game_rules) && "settings_current_round" %in% names(data$game_rules)) {
-      data$game_rules$settings_current_round[[1]]
-    } else {
-      NA_integer_
-    }
-
-    inference_source <- if (!is.null(data$game_rules) && "round_inference_source" %in% names(data$game_rules)) {
-      data$game_rules$round_inference_source[[1]]
-    } else {
-      NA_character_
-    }
+    settings_round <- round_state()$settings_current_round
+    inference_source <- round_state()$round_inference_source
 
     if (!is.na(settings_round) && settings_round != round_value) {
-      return(paste0(round_value, " (settings ", settings_round, ", ", inference_source %||% "inferred", ")"))
+      return(paste0("R", round_value, " (settings R", settings_round, ", ", inference_source %||% "inferred", ")"))
     }
 
-    as.character(round_value)
+    paste0("R", round_value)
+  })
+
+  output$snapshot_round_text <- renderText({
+    round_value <- snapshot_round()
+    if (is.na(round_value)) {
+      return("Unavailable")
+    }
+    paste0("R", round_value)
+  })
+
+  output$snapshot_status_text <- renderText({
+    live_round <- current_round()
+    stored_round <- snapshot_round()
+
+    if (is.na(live_round) && is.na(stored_round)) {
+      return("No saved league snapshot is available yet.")
+    }
+
+    if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
+      return(paste0("Live round is R", live_round, " but your saved league snapshot is still R", stored_round, ". Run the refresh workflow once and the board will catch up."))
+    }
+
+    round_label <- if (!is.na(stored_round)) stored_round else live_round
+    paste0("Live round and saved league snapshot are aligned at R", round_label, ".")
   })
 
   output$last_refresh_text <- renderText({
@@ -922,7 +1303,7 @@ server <- function(input, output, session) {
         Team = team_abbrev,
         `Next Opp` = next_opponent,
         `Proj 3w` = round(projected_score_next_3_weeks, 1),
-        `Next Rise` = dollar(projected_price_rise_next_round),
+        `Price Signal` = dollar(projected_price_signal_next_round),
         Matchup = round(next_matchup_rating, 1),
         Swing = schedule_swing_indicator,
         Urgency = sell_urgency
@@ -962,7 +1343,7 @@ server <- function(input, output, session) {
     latest_ladder_round() %>%
       left_join(
         dashboard_data()$team_round_stats_history %>%
-          filter(round == current_round()) %>%
+          filter(round == snapshot_round()) %>%
           group_by(user_team_id) %>%
           slice_max(run_ts, n = 1, with_ties = FALSE) %>%
           ungroup() %>%
