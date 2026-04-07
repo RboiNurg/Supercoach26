@@ -1,0 +1,369 @@
+---
+title: "SuperCoach Table Validation Guide"
+output: html_document
+---
+
+## Purpose
+
+This report is a table-by-table guide.
+
+For each saved `.rds` table it tells you:
+
+- what the table is
+- how we derived it
+- what it is supposed to mean
+- what source to compare it against
+- how many rows it currently has
+- a small sample of rows to inspect
+
+The goal is to make spot-checking practical instead of forcing you to reverse-engineer the production Rmd.
+
+## Setup
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(purrr)
+  library(stringr)
+  library(tidyr)
+  library(knitr)
+})
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Configuration
+
+```{r}
+league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
+season_year <- 2026L
+data_dir <- file.path("data", paste0("supercoach_league_", league_id))
+```
+
+## Helpers
+
+```{r}
+`%||%` <- function(a, b) {
+  if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
+}
+
+read_optional_rds <- function(path) {
+  if (file.exists(path)) readRDS(path) else NULL
+}
+
+fmt_dt <- function(x) {
+  if (length(x) == 0 || all(is.na(x))) return("NA")
+  format(max(x, na.rm = TRUE), tz = "Australia/Sydney", usetz = TRUE)
+}
+
+obj_row_count <- function(obj) {
+  if (is.null(obj)) return(NA_integer_)
+  if (is.data.frame(obj)) return(nrow(obj))
+  length(obj)
+}
+
+latest_run_ts <- function(obj) {
+  if (is.null(obj) || !is.data.frame(obj) || !"run_ts" %in% names(obj) || !nrow(obj)) {
+    return("NA")
+  }
+  fmt_dt(obj$run_ts)
+}
+
+duplicate_groups <- function(obj, key_cols) {
+  if (is.null(obj) || !is.data.frame(obj) || is.null(key_cols) || !all(key_cols %in% names(obj))) {
+    return(NA_integer_)
+  }
+
+  obj %>%
+    count(across(all_of(key_cols)), name = "n") %>%
+    filter(n > 1) %>%
+    nrow()
+}
+
+sample_table <- function(obj, cols = NULL, n = 3) {
+  if (is.null(obj)) {
+    return(tibble(note = "File missing"))
+  }
+
+  if (!is.data.frame(obj)) {
+    return(tibble(note = paste("Object class:", paste(class(obj), collapse = ", "))))
+  }
+
+  if (!nrow(obj)) {
+    return(tibble(note = "No rows"))
+  }
+
+  if (!is.null(cols)) {
+    cols <- cols[cols %in% names(obj)]
+    if (length(cols) > 0) {
+      obj <- obj[, cols, drop = FALSE]
+    }
+  } else {
+    obj <- obj[, seq_len(min(8, ncol(obj))), drop = FALSE]
+  }
+
+  utils::head(as.data.frame(obj, stringsAsFactors = FALSE), n)
+}
+
+unwrap_cell <- function(x) {
+  if (is.list(x) && length(x) == 1) x[[1]] else x
+}
+
+path_for <- function(name) {
+  file.path(data_dir, paste0(name, ".rds"))
+}
+
+render_detail_section <- function(spec, objects, coverage_lookup) {
+  obj <- objects[[spec$table_name]]
+  coverage_row <- coverage_lookup %>%
+    filter(table_name == spec$table_name) %>%
+    slice_head(n = 1)
+
+  status_value <- if (nrow(coverage_row)) coverage_row$status[[1]] else spec$default_status[[1]]
+  notes_value <- if (nrow(coverage_row)) coverage_row$notes[[1]] else spec$meaning[[1]]
+  source_value <- if (nrow(coverage_row)) coverage_row$source_endpoint[[1]] else spec$source_check[[1]]
+
+  cat("\n")
+  cat(paste0("## ", spec$table_name[[1]], "\n\n"))
+  cat(paste0("- Category: ", spec$category[[1]], "\n"))
+  cat(paste0("- Status: ", status_value %||% "NA", "\n"))
+  cat(paste0("- Grain: ", spec$grain[[1]], "\n"))
+  cat(paste0("- Row count: ", obj_row_count(obj), "\n"))
+  cat(paste0("- Latest run timestamp: ", latest_run_ts(obj), "\n"))
+  cat(paste0("- Duplicate key groups: ", duplicate_groups(obj, unwrap_cell(spec$key_cols[[1]])), "\n"))
+  cat(paste0("- Built from: ", spec$built_from[[1]], "\n"))
+  cat(paste0("- Derived by: ", spec$derivation[[1]], "\n"))
+  cat(paste0("- What it means: ", spec$meaning[[1]], "\n"))
+  cat(paste0("- Spot-check against: ", source_value %||% spec$source_check[[1]], "\n"))
+  cat(paste0("- Spot-check note: ", spec$spot_check[[1]], "\n"))
+  cat("\n")
+
+  print(kable(sample_table(obj, unwrap_cell(spec$sample_cols[[1]]), n = 3), caption = paste(spec$table_name[[1]], "sample rows")))
+
+  if (nrow(coverage_row) && !is.na(notes_value) && nzchar(notes_value)) {
+    cat("\n")
+    cat(paste0("Coverage note: ", notes_value, "\n\n"))
+  }
+}
+```
+
+## Load Tables
+
+```{r}
+table_names <- c(
+  "ladder_history",
+  "fixtures_history",
+  "fixture_triggers",
+  "team_players_snapshots",
+  "team_players_latest",
+  "team_round_signatures",
+  "team_round_stats_history",
+  "actual_trade_history",
+  "inferred_changes",
+  "competition_state_history",
+  "nrl_fixture_source_history",
+  "nrl_team_context_history",
+  "players_cf_history",
+  "players_cf_latest",
+  "player_history_refresh_log",
+  "source_refresh_log",
+  "run_log",
+  "player_price_history_2026",
+  "players_cf_2026",
+  "player_id_lookup",
+  "player_price_history_sc",
+  "master_player_round_latest",
+  "opponent_behaviour_history",
+  "squad_round_enriched",
+  "game_rules_round_state",
+  "player_scoring_component_history",
+  "team_list_role_certainty",
+  "fixture_matchup_table",
+  "team_performance_context",
+  "cash_generation_model",
+  "league_ownership_movement",
+  "availability_risk_table",
+  "captaincy_vc_table",
+  "structure_health_table",
+  "scenario_refresh_table",
+  "long_horizon_planning_table",
+  "checklist_coverage_status"
+)
+
+objects <- setNames(lapply(table_names, function(x) read_optional_rds(path_for(x))), table_names)
+coverage_lookup <- objects[["checklist_coverage_status"]] %||% tibble()
+```
+
+## Run Snapshot
+
+```{r}
+game_rules <- objects[["game_rules_round_state"]]
+source_refresh <- objects[["source_refresh_log"]]
+nrl_fixture_source <- objects[["nrl_fixture_source_history"]]
+
+infer_audit_round <- function(fixture_tbl, run_time, fallback_round = NA_integer_, close_buffer_hours = 3) {
+  if (is.null(fixture_tbl) || nrow(fixture_tbl) == 0) {
+    return(list(current_round = fallback_round, round_closed_through_utc = as.POSIXct(NA, tz = "UTC")))
+  }
+
+  fixture_tbl <- fixture_tbl %>%
+    mutate(
+      fixture_key = if ("fixture_key" %in% names(.)) fixture_key else paste(round, team_abbrev, opponent_abbrev, sep = "::"),
+      kickoff_value = if ("kickoff_at_utc" %in% names(.)) as.POSIXct(kickoff_at_utc, tz = "UTC") else as.POSIXct(kickoff_utc, tz = "UTC"),
+      match_state_value = tolower(trimws(as.character(if ("match_state" %in% names(.)) match_state else match_status)))
+    ) %>%
+    filter(!bye_flag %in% TRUE, !is.na(round)) %>%
+    group_by(round, fixture_key) %>%
+    slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(
+      close_cutoff_utc = kickoff_value + close_buffer_hours * 60 * 60,
+      fixture_closed = case_when(
+        match_state_value %in% c("fulltime", "full time", "post", "completed", "complete") ~ TRUE,
+        !is.na(close_cutoff_utc) & as.POSIXct(run_time, tz = "UTC") >= close_cutoff_utc ~ TRUE,
+        TRUE ~ FALSE
+      )
+    )
+
+  latest_closed_round <- fixture_tbl %>%
+    group_by(round) %>%
+    summarise(
+      round_closed = n() > 0 & all(fixture_closed %in% TRUE),
+      round_closed_through_utc = suppressWarnings(max(close_cutoff_utc, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    filter(round_closed %in% TRUE) %>%
+    arrange(desc(round)) %>%
+    slice_head(n = 1)
+
+  if (nrow(latest_closed_round) == 0) {
+    return(list(current_round = fallback_round, round_closed_through_utc = as.POSIXct(NA, tz = "UTC")))
+  }
+
+  list(
+    current_round = latest_closed_round$round[[1]] + 1L,
+    round_closed_through_utc = latest_closed_round$round_closed_through_utc[[1]]
+  )
+}
+
+audit_round <- infer_audit_round(
+  fixture_tbl = nrl_fixture_source,
+  run_time = if (!is.null(source_refresh) && nrow(source_refresh)) max(source_refresh$run_ts, na.rm = TRUE) else Sys.time(),
+  fallback_round = if (!is.null(game_rules) && nrow(game_rules)) game_rules$current_round[[1]] else NA_integer_
+)
+
+run_snapshot <- tibble(
+  field = c(
+    "current_round",
+    "effective_current_round_audit",
+    "next_round",
+    "settings_current_round",
+    "settings_next_round",
+    "round_inference_source",
+    "round_closed_through_utc",
+    "last_refresh_run_ts"
+  ),
+  value = c(
+    if (!is.null(game_rules) && nrow(game_rules)) game_rules$current_round[[1]] else NA,
+    audit_round$current_round,
+    if (!is.null(game_rules) && nrow(game_rules)) game_rules$next_round[[1]] else NA,
+    if (!is.null(game_rules) && nrow(game_rules) && "settings_current_round" %in% names(game_rules)) game_rules$settings_current_round[[1]] else NA,
+    if (!is.null(game_rules) && nrow(game_rules) && "settings_next_round" %in% names(game_rules)) game_rules$settings_next_round[[1]] else NA,
+    if (!is.null(game_rules) && nrow(game_rules) && "round_inference_source" %in% names(game_rules)) game_rules$round_inference_source[[1]] else NA,
+    if (!is.null(game_rules) && nrow(game_rules) && "round_closed_through_utc" %in% names(game_rules) && !is.na(game_rules$round_closed_through_utc[[1]])) as.character(game_rules$round_closed_through_utc[[1]]) else as.character(audit_round$round_closed_through_utc),
+    if (!is.null(source_refresh) && nrow(source_refresh)) fmt_dt(source_refresh$run_ts) else "NA"
+  )
+)
+
+kable(run_snapshot, caption = "Current saved run snapshot")
+```
+
+## Table Summary
+
+```{r}
+table_registry <- tribble(
+  ~table_name, ~category, ~default_status, ~grain, ~built_from, ~derivation, ~meaning, ~source_check, ~spot_check, ~key_cols, ~sample_cols,
+  "competition_state_history", "source log", "source_layer", "one row per refresh run", "/settings", "Append the raw competition state each time the refresh runs.", "Historical record of what the competition settings endpoint said at each refresh.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/settings (auth required)", "Check current_round, next_round, lockout dates, and whether the raw settings lag the actual NRL schedule.", list(c("run_ts")), list(c("run_ts", "settings_current_round", "current_round", "round_inference_source", "competition_status", "lockout_start")),
+  "source_refresh_log", "source log", "source_layer", "one row per refresh run", "refresh_supercoach_logs.R bookkeeping", "Append one summary row per run after all source pulls complete.", "Quick audit trail for what the pipeline refreshed on each run.", "No external page; compare to workflow/app refresh time", "Check rounds_pulled, mutable_rounds, and player_history_refreshed_n after each run.", list(c("run_ts")), list(c("run_ts", "settings_current_round", "current_round", "round_inference_source", "mutable_rounds", "rounds_pulled", "nrl_fixture_rounds_pulled")),
+  "run_log", "source log", "source_layer", "one row per refresh run", "refresh_supercoach_logs.R bookkeeping", "Append performance and pull-volume metrics per run.", "Operational log showing what changed and how much work the run did.", "No direct web page", "Check whether player_history_refreshed_n or failed_team_rounds suddenly jump.", list(c("run_ts")), list(c("run_ts", "first_run", "current_round", "changed_team_rounds", "failed_team_rounds", "player_history_refreshed_n")),
+  "ladder_history", "source log", "source_layer", "one row per SuperCoach team per round per refresh", "league ladderAndFixtures endpoint", "Pull ladder rows for mutable rounds and append them.", "Historical SuperCoach league ladder snapshots.", paste0("https://www.supercoach.com.au/2026/api/nrl/classic/v1/leagues/", league_id, "/ladderAndFixtures?round={round} (auth required)"), "Pick one round and compare ladder positions and team names against the live league view.", list(c("run_ts", "round", "user_team_id")), list(c("run_ts", "round", "user_team_id", "team_name", "coach_name", "position", "round_points")),
+  "fixtures_history", "source log", "source_layer", "one row per SuperCoach fixture per round per refresh", "league ladderAndFixtures endpoint", "Pull head-to-head fixtures for relevant rounds and append them.", "Historical SuperCoach matchup schedule and current live scores.", paste0("https://www.supercoach.com.au/2026/api/nrl/classic/v1/leagues/", league_id, "/ladderAndFixtures?round={round} (auth required)"), "Compare your current matchup and scores against the league fixture screen.", list(c("run_ts", "fixture_id")), list(c("run_ts", "round", "fixture", "user_team1_name", "user_team1_points", "user_team2_name", "user_team2_points")),
+  "team_round_stats_history", "source log", "source_layer", "one row per SuperCoach team per round per refresh", "/userteams/{id}/statsPlayers", "Pull roster summary stats for each team-round and append them.", "Historical team-level points, price, change count, and boosts used.", paste0("https://www.supercoach.com.au/2026/api/nrl/classic/v1/userteams/{team_id}/statsPlayers?round={round} (auth required)"), "Compare total_changes, trade_boosts_used, and points for a known team/round.", list(c("run_ts", "user_team_id", "round")), list(c("run_ts", "user_team_id", "round", "points", "price", "total_changes", "trade_boosts_used")),
+  "team_players_snapshots", "source log", "source_layer", "many rows per team-round snapshot", "/userteams/{id}/statsPlayers", "Store a full roster snapshot only when the team-round roster signature changes.", "Historical record of who was in each squad snapshot.", paste0("https://www.supercoach.com.au/2026/api/nrl/classic/v1/userteams/{team_id}/statsPlayers?round={round} (auth required)"), "Check one team-round after a trade and confirm the snapshot only changes when the roster changes.", list(c("run_ts", "user_team_id", "round", "player_id")), list(c("run_ts", "user_team_id", "round", "player_id", "position", "position_sort", "picked")),
+  "team_round_signatures", "source log", "source_layer", "one row per changed team-round snapshot", "team_players_snapshots", "Hash each team-round roster so we only append changed snapshots.", "Change-detection layer that decides whether a new roster snapshot is needed.", "No direct web page", "If too many or too few roster snapshots are saved, inspect this table first.", list(c("run_ts", "user_team_id", "round")), list(c("run_ts", "user_team_id", "round", "roster_signature")),
+  "team_players_latest", "base latest view", "source_layer", "many rows per team-round latest roster", "team_players_snapshots + team_round_signatures", "Take the latest saved snapshot for each team-round.", "Current best-known roster for each SuperCoach team and round.", "Compare against the current team page in SuperCoach", "Check one team and round you know well and confirm the selected 17/reserves look right.", list(c("user_team_id", "round", "player_id")), list(c("run_ts", "user_team_id", "round", "player_id", "position", "position_long", "position_sort")),
+  "actual_trade_history", "source log", "source_layer", "one row per actual trade event", "/userteams/{id}/statsPlayers", "Persist actual buy/sell pairs returned by the authenticated team endpoint.", "Confirmed trade events where the source API exposes the trade pair.", paste0("https://www.supercoach.com.au/2026/api/nrl/classic/v1/userteams/{team_id}/statsPlayers?round={round} (auth required)"), "For your own team, compare a known trade week against what SuperCoach shows.", list(c("round", "user_team_id", "buy_player_id", "sell_player_id")), list(c("run_ts", "round", "user_team_id", "buy_player_id", "sell_player_id", "trade_source")),
+  "inferred_changes", "source log", "source_layer", "one row per detected roster change event", "team_players_snapshots", "Compare consecutive roster snapshots to infer ins/outs when actual trades are not exposed.", "Best-effort inferred trade/change history for league opponents.", "No direct public page; compare against opponent roster changes", "Treat this as inferred, not ground truth. Spot-check known opponent trades.", list(c("to_run_ts", "user_team_id", "round")), list(c("detected_run_ts", "user_team_id", "round", "players_out_n", "players_in_n")),
+  "players_cf_history", "source log", "source_layer", "one row per changed player status state", "/players-cf", "Append a new row only when a player's lock/status/injury state changes.", "History of player availability, lock, and status changes.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/players-cf (auth required)", "Check injury text and locked flags for players you know changed recently.", list(c("run_ts", "player_id")), list(c("run_ts", "player_id", "full_name", "team_abbrev", "locked_flag", "played_status", "injury_suspension_status_text")),
+  "players_cf_latest", "base latest view", "source_layer", "one row per player", "players_cf_history", "Take the latest status row per player.", "Current best-known player availability/lockout state.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/players-cf (auth required)", "Spot-check a few injured or locked players against the live app/site.", list(c("player_id")), list(c("player_id", "full_name", "team_abbrev", "locked_flag", "played_status", "injury_suspension_status_text")),
+  "player_history_refresh_log", "source log", "source_layer", "one row per player history refresh", "initialvalue.php + data-yearplot.php", "Log which player histories were refreshed and why.", "Audit trail for why a player's external price history was re-pulled.", paste0("https://www.nrlsupercoachstats.com/initialvalue.php?year=", season_year), "If a player's history looks stale, inspect this log to see whether they were refreshed.", list(c("run_ts", "player_name")), list(c("run_ts", "player_name", "refresh_reason", "current_price_external", "latest_price_stored")),
+  "player_price_history_2026", "source log", "source_layer", "one row per external player per round", "data-yearplot.php", "Rebuild external player round history for refreshed players and upsert by player+round.", "External price/score/minutes history keyed by player name.", "https://www.nrlsupercoachstats.com/highcharts/data-yearplot.php?dropdown1={player_name}&YEAR=2026", "Spot-check a known player like Nathan Cleary and compare rounds/price to NRL SuperCoach Stats.", list(c("player_name", "year", "round")), list(c("player_name", "round", "score", "mins", "price")),
+  "players_cf_2026", "helper table", "source_layer", "one row per player", "players_cf_latest", "Copy the latest players-cf view for downstream joins.", "Convenience copy of the current player catalog.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/players-cf (auth required)", "Check row count matches players_cf_latest.", list(c("player_id")), list(c("player_id", "full_name", "team_abbrev", "active_flag")),
+  "player_id_lookup", "helper table", "source_layer", "one row per player id", "players_cf_latest", "Reduce the current player catalog to the id/name/team lookup used elsewhere.", "Helper lookup from player_id to name/team.", "No direct public page", "Use this when you want to decode trade ids into names.", list(c("player_id")), list(c("player_id", "full_name", "team_abbrev")),
+  "player_price_history_sc", "base latest view", "source_layer", "one row per SuperCoach player_id per round", "player_price_history_2026 + player_id crosswalk", "Map external player-name histories onto current SuperCoach player ids.", "Canonical player score/minutes/price history keyed by player_id.", "Compare against NRL SuperCoach Stats for a few players", "This is the key history table feeding many downstream outputs.", list(c("player_id", "round")), list(c("player_id", "player_name", "round", "score", "mins", "price")),
+  "nrl_fixture_source_history", "source log", "source_layer", "one row per NRL team per round per refresh", "official NRL draw page", "Scrape official draw rows and append them with kickoff and match-state context.", "Historical official NRL fixture source used for matchup logic and round inference.", "https://www.nrl.com/draw/?round={round}", "Check opponent, venue, kickoff time, home/away, and bye rows against the official draw.", list(c("run_ts", "round", "team_abbrev")), list(c("run_ts", "round", "team_abbrev", "opponent_abbrev", "match_state", "kickoff_at_utc", "venue")),
+  "nrl_team_context_history", "source log", "source_layer", "one row per NRL team per round per refresh", "official NRL ladder page", "Scrape official ladder/context rows and append them by round.", "Historical official NRL ladder/context source for trend and ladder joins.", "https://www.nrl.com/ladder/?round={round}", "Check ladder position, streak, form, next opponent against the official ladder page.", list(c("run_ts", "round", "team_abbrev")), list(c("run_ts", "round", "team_abbrev", "ladder_position", "streak", "form", "next_opponent_abbrev")),
+  "fixture_triggers", "derived output", "partial", "one row per production run", "settings + inferred round state", "Package round/lockout trigger fields for automation and app use.", "Small trigger table showing the active round window and lockout timing.", "Compare against /settings and the official NRL draw close of the last round", "Check current_round, next_round, and lockout times after each refresh.", list(c("run_ts")), list(c("run_ts", "settings_current_round", "current_round", "round_inference_source", "lockout_start")),
+  "game_rules_round_state", "derived output", "partial", "one row per production run", "/settings + my team round stats + players_cf_latest", "Take settings, effective round state, position rules, and my trade usage into one table.", "Current operating state of the game for the dashboard and GPT pack.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/settings (auth required)", "This is the first table to inspect when the app shows the wrong round.", list(c("run_ts")), list(c("run_ts", "settings_current_round", "current_round", "next_round", "round_inference_source", "trades_remaining", "boosts_remaining")),
+  "master_player_round_latest", "derived output", "partial", "one row per player", "players_cf_latest + initialvalue.php + player_price_history_sc", "Join current player catalog to external price history rollups and history lists.", "Main current-player master table used for market and squad analysis.", paste0("https://www.nrlsupercoachstats.com/initialvalue.php?year=", season_year), "Check current_price, average_3_round, status, and team for a few known players.", list(c("player_id")), list(c("player_id", "full_name", "team", "current_price", "current_season_average", "average_3_round", "status")),
+  "player_scoring_component_history", "derived output", "partial", "one row per player per round", "player_price_history_sc rollups", "Convert score/minutes/price history into volatility, floor, ceiling, and ppm style metrics.", "History table of scoring-related rollups; most detailed components are still unavailable.", "https://www.nrlsupercoachstats.com/highcharts/data-yearplot.php?dropdown1={player_name}&YEAR=2026", "Check total_score, minutes_played, volatility_score for a known player-round.", list(c("player_id", "round")), list(c("player_id", "round", "total_score", "minutes_played", "volatility_score", "floor_score_estimate", "ceiling_score_estimate")),
+  "team_list_role_certainty", "derived output", "partial", "one row per rostered player per team-round", "team_players_latest + player_price_history_sc", "Take selected squad rows and attach a simple recent-minutes role certainty heuristic.", "League roster selection and likely role view, not an official Tuesday/Friday team-list feed.", "Compare against current SuperCoach team pages; no official late-mail source wired yet", "Use this as a roster/role hint only, not as ground-truth late mail.", list(c("user_team_id", "round", "player_id")), list(c("user_team_id", "round", "player_id", "starting_or_bench", "listed_position", "likely_minutes", "role_change_likelihood")),
+  "fixture_matchup_table", "derived output", "partial", "one row per NRL team per round", "nrl_fixture_source_history + nrl_team_context_history", "Turn official draw plus ladder context into matchup ratings, rest/travel, and forward difficulty windows.", "Real NRL matchup context for each club and round.", "https://www.nrl.com/draw/?round={round} and https://www.nrl.com/ladder/?round={round}", "Check opponent, venue, home_away, days_rest, and bye_flag against the official draw first.", list(c("team_abbrev", "round")), list(c("round", "team_abbrev", "opponent", "venue", "home_away", "days_rest", "matchup_rating_by_team", "schedule_swing_indicator")),
+  "team_performance_context", "derived output", "partial", "one row per NRL team per round", "nrl_fixture_source_history + nrl_team_context_history", "Roll official scores into recent attacking/defensive trends and attach ladder context.", "Real NRL team form/trend context by round.", "https://www.nrl.com/draw/?round={round} and https://www.nrl.com/ladder/?round={round}", "Check points_scored/conceded and ladder_position against the official NRL pages.", list(c("team_abbrev", "round")), list(c("team_abbrev", "round", "points_scored", "points_conceded", "attacking_trend_last_3", "defensive_trend_last_3")),
+  "cash_generation_model", "derived output", "partial", "one row per player", "master_player inputs + initialvalue.php projections", "Take current and projected external prices to classify cash cows and projected rises/falls.", "Cash generation view used for trade timing and cash-cow decisions.", paste0("https://www.nrlsupercoachstats.com/initialvalue.php?year=", season_year), "Check current_price and projected next price for a few players against NRL SuperCoach Stats.", list(c("player_id")), list(c("player_id", "full_name", "team_abbrev", "current_price", "projected_price_rise_next_round", "cash_cow_maturity_status")),
+  "squad_round_enriched", "derived output", "partial", "one row per rostered player per team-round", "team_players_latest + player history + fixture_matchup_table + master_player", "Attach acquisition, price, role, lock, matchup, and simple projection fields to each roster slot.", "Main team-by-player analysis table for squad planning.", "Compare to your SuperCoach team page plus fixture_matchup_table", "Check one of your players for acquisition_round, current_price, selected_this_week, and projected_score fields.", list(c("user_team_id", "round", "player_id")), list(c("user_team_id", "team_name", "round", "full_name", "current_price", "selected_this_week", "projected_score_next_3_weeks")),
+  "opponent_behaviour_history", "derived output", "partial", "one row per SuperCoach team per round", "team_players_latest + inferred_changes + actual_trade_history + team_round_stats_history", "Summarise league-opponent behaviour from snapshots, actual trades, and boost counts.", "Fantasy-opponent behaviour table, not real NRL matchup data.", "Compare to opponent roster changes in the SuperCoach league", "This is about your SuperCoach opponent, not their NRL fixture.", list(c("user_team_id", "round")), list(c("user_team_id", "team_name", "round", "inferred_trade_events", "actual_trade_count", "trade_boosts_used", "behaviour_source")),
+  "league_ownership_movement", "derived output", "unavailable", "one row per player", "placeholder only", "Create an NA-filled placeholder because confirmed ownership sources were not found.", "Placeholder table for ownership fields we have not sourced yet.", "No confirmed source currently", "Expect this to be mostly NA until a confirmed ownership source is added.", list(c("player_id")), list(c("player_id", "full_name", "ownership_percentage", "ownership_movement")),
+  "availability_risk_table", "derived output", "partial", "one row per player", "players_cf_latest", "Translate current player availability fields into a simple risk-band table.", "Current injury/suspension/lock risk snapshot.", "https://www.supercoach.com.au/2026/api/nrl/classic/v1/players-cf (auth required)", "Check known injured players and make sure the risk_band and status text make sense.", list(c("player_id")), list(c("player_id", "full_name", "team_abbrev", "injury_suspension_status_text", "locked_flag", "risk_band")),
+  "captaincy_vc_table", "derived output", "unavailable", "one row per rostered player per team-round", "placeholder only", "Create NA captain/vice-captain flags because confirmed source fields were not found.", "Placeholder for captaincy fields we do not yet have.", "No confirmed source currently", "Expect NA values for now.", list(c("user_team_id", "round", "player_id")), list(c("user_team_id", "round", "player_id", "captain_flag", "vice_captain_flag", "captaincy_source")),
+  "structure_health_table", "derived output", "partial", "one row per SuperCoach team per round", "squad_round_enriched", "Summarise squad composition, locks, DPP count, and projected score at team-round level.", "High-level health summary for each league team.", "Compare to the team page and structure metrics in the app", "Check players_in_squad, locked_players, and avg_projected_score_this_week for your own team first.", list(c("user_team_id", "round")), list(c("user_team_id", "team_name", "round", "players_in_squad", "locked_players", "dpp_players", "avg_projected_score_this_week")),
+  "scenario_refresh_table", "derived output", "partial", "one row per production run", "settings + inferred round state", "Create a small refresh-trigger table used by scheduling logic.", "Tiny automation context table for refresh timing.", "Compare next_refresh_trigger to current lockout timing", "This is mostly for automation, not decision-making.", list(c("run_ts")), list(c("run_ts", "current_round", "competition_status", "is_lockout", "next_refresh_trigger", "refresh_reason")),
+  "long_horizon_planning_table", "derived output", "partial", "one row for your team", "squad_round_enriched + game_rules_round_state", "Collapse your latest squad into a one-row planning summary for the next few weeks.", "Top-line long-horizon planning summary for your team.", "Compare squad value/trades/boosts to your own team state", "Check current_squad_value, projected_score_next_3_weeks, trades_remaining, and boosts_remaining.", list(c("team_name")), list(c("team_name", "current_round", "current_squad_value", "projected_score_next_3_weeks", "trades_remaining", "boosts_remaining")),
+  "checklist_coverage_status", "documentation", "documentation", "one row per checklist section", "production Rmd final summary", "Write a summary of what checklist items are implemented, partial, or unavailable.", "Coverage tracker for the whole project.", "Compare to supercoach_data_lookup_build_checklist.md", "Use this to see which missing fields are expected rather than bugs.", list(c("checklist_item")), list(c("checklist_item", "table_name", "status", "source_endpoint"))
+)
+
+table_summary <- table_registry %>%
+  mutate(
+    row_count = map_int(table_name, ~ obj_row_count(objects[[.x]])),
+    latest_run = map_chr(table_name, ~ latest_run_ts(objects[[.x]])),
+    duplicate_key_groups = map2_int(table_name, key_cols, ~ duplicate_groups(objects[[.x]], unwrap_cell(.y)))
+  ) %>%
+  select(table_name, category, default_status, row_count, latest_run, duplicate_key_groups, meaning)
+
+kable(table_summary, caption = "All saved tables at a glance")
+```
+
+## How To Use This Report
+
+1. Start with `game_rules_round_state`, `source_refresh_log`, and `competition_state_history`.
+2. Then check the public-source tables:
+   - `nrl_fixture_source_history`
+   - `nrl_team_context_history`
+   - `fixture_matchup_table`
+   - `team_performance_context`
+3. Then check mutable SuperCoach player tables:
+   - `players_cf_latest`
+   - `availability_risk_table`
+   - `team_list_role_certainty`
+4. Then check decision tables:
+   - `master_player_round_latest`
+   - `cash_generation_model`
+   - `squad_round_enriched`
+   - `structure_health_table`
+   - `long_horizon_planning_table`
+
+If one looks wrong, use the “Spot-check against” line in that section and compare a few rows manually.
+
+## Table-by-Table Guide
+
+```{r results='asis'}
+walk(
+  split(table_registry, seq_len(nrow(table_registry))),
+  ~ render_detail_section(.x, objects, coverage_lookup)
+)
+```

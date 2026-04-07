@@ -346,6 +346,47 @@ roll_max_right <- function(x, k) {
   out
 }
 
+cap_between <- function(x, lower, upper) {
+  pmin(pmax(x, lower), upper)
+}
+
+sanitize_projected_price_delta <- function(
+  projected_price_next,
+  current_price,
+  price_change_last_round,
+  average_3_round,
+  season_average
+) {
+  current_price <- suppressWarnings(as.numeric(current_price))
+  projected_price_next <- suppressWarnings(as.numeric(projected_price_next))
+  price_change_last_round <- suppressWarnings(as.numeric(price_change_last_round))
+  average_3_round <- suppressWarnings(as.numeric(average_3_round))
+  season_average <- suppressWarnings(as.numeric(season_average))
+
+  raw_delta <- projected_price_next - current_price
+  plausible_cap <- pmax(90000, pmin(140000, current_price * 0.12))
+  raw_is_plausible <- !is.na(raw_delta) &
+    !is.na(current_price) &
+    !is.infinite(raw_delta) &
+    abs(raw_delta) <= plausible_cap
+
+  form_delta <- cap_between(coalesce(average_3_round, season_average, 0) - coalesce(season_average, average_3_round, 0), -30, 30) * 2500
+  last_change_component <- cap_between(coalesce(price_change_last_round, 0) * 0.7, -80000, 80000)
+  heuristic_delta <- cap_between(last_change_component + form_delta, -90000, 90000)
+
+  dplyr::if_else(raw_is_plausible, raw_delta, heuristic_delta)
+}
+
+projection_method_label <- function(projected_price_next, current_price) {
+  raw_delta <- suppressWarnings(as.numeric(projected_price_next) - as.numeric(current_price))
+  plausible_cap <- pmax(90000, pmin(140000, as.numeric(current_price) * 0.12))
+  dplyr::if_else(
+    !is.na(raw_delta) & !is.na(current_price) & !is.infinite(raw_delta) & abs(raw_delta) <= plausible_cap,
+    "external_projected_price",
+    "smoothed_recent_trend"
+  )
+}
+
 build_roster_signature <- function(df) {
   if (nrow(df) == 0 || !"player_id" %in% names(df)) return(NA_character_)
 
@@ -774,8 +815,12 @@ position_rules_tbl <- bind_rows_safe(settings$game$positions) %>%
 game_rules_round_state <- tibble(
   run_ts = run_ts,
   league_id = league_id,
+  settings_current_round = settings_current_round,
+  settings_next_round = settings_next_round,
   current_round = current_round,
   next_round = next_round,
+  round_inference_source = round_inference_source,
+  round_closed_through_utc = round_closed_through_utc,
   competition_status = competition_status,
   is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
   is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
@@ -810,13 +855,19 @@ game_rules_round_state <- tibble(
 
 fixture_triggers <- tibble(
   run_ts = run_ts,
+  settings_current_round = settings_current_round,
+  settings_next_round = settings_next_round,
   current_round = current_round,
   next_round = next_round,
+  round_inference_source = round_inference_source,
+  round_closed_through_utc = round_closed_through_utc,
   lockout_start = safe_chr(settings$competition$lockout_start),
   lockout_end = safe_chr(settings$competition$lockout_end),
   competition_status = competition_status
 )
 
+# Team-list certainty is still derived from SuperCoach squad snapshots.
+# It is useful for spot checks, but it is not yet an official Tuesday team list / Friday late-mail feed.
 team_list_role_certainty <- team_players_latest %>%
   left_join(
     player_price_history_sc %>%
@@ -1061,22 +1112,44 @@ fixture_matchup_table <- team_schedule %>%
 cash_generation_model <- player_catalog %>%
   left_join(initialvalue_catalog, by = c("full_name" = "player_name", "team_abbrev", "name_norm")) %>%
   left_join(latest_price_rollups, by = "player_id") %>%
+  mutate(
+    current_price_value = coalesce(current_price_history, current_price_external),
+    projected_price_change_external = projected_price_next - current_price_value,
+    projected_price_signal_next_round = sanitize_projected_price_delta(
+      projected_price_next = projected_price_next,
+      current_price = current_price_value,
+      price_change_last_round = price_change_last_round,
+      average_3_round = avg_3,
+      season_average = season_average
+    ),
+    projected_price_next_sanitized = current_price_value + projected_price_signal_next_round,
+    projection_method = projection_method_label(
+      projected_price_next = projected_price_next,
+      current_price = current_price_value
+    )
+  ) %>%
   transmute(
     run_ts = run_ts,
     player_id,
     full_name,
     team_abbrev,
     starting_price = current_price_external,
-    current_price = coalesce(current_price_history, current_price_external),
+    current_price = current_price_value,
     price_change_last_round,
     cumulative_cash_generation,
-    projected_price_rise_next_round = projected_price_next - coalesce(current_price_history, current_price_external),
-    projected_price_fall_next_round = if_else(projected_price_next < coalesce(current_price_history, current_price_external), projected_price_next - coalesce(current_price_history, current_price_external), 0),
+    projected_price_next_external = projected_price_next,
+    projected_price_change_external,
+    projected_price_next_sanitized,
+    projected_price_signal_next_round,
+    projected_price_rise_next_round = projected_price_signal_next_round,
+    projected_price_fall_next_round = if_else(projected_price_signal_next_round < 0, projected_price_signal_next_round, 0),
+    projection_method,
     breakeven_trend = NA_real_,
     games_until_peak_cash_estimate = NA_real_,
     cash_cow_maturity_status = case_when(
-      !is.na(projected_price_next) & projected_price_next > coalesce(current_price_history, current_price_external) ~ "rising",
-      !is.na(projected_price_next) & projected_price_next <= coalesce(current_price_history, current_price_external) ~ "near_peak_or_peaked",
+      !is.na(projected_price_signal_next_round) & projected_price_signal_next_round >= 20000 ~ "rising",
+      !is.na(projected_price_signal_next_round) & projected_price_signal_next_round <= -15000 ~ "near_peak_or_peaked",
+      !is.na(projected_price_signal_next_round) ~ "flattening",
       TRUE ~ NA_character_
     ),
     player_classification = case_when(
@@ -1181,7 +1254,7 @@ opponent_behaviour_history <- team_players_latest %>%
       group_by(user_team_id, round) %>%
       summarise(
         detected_run_ts = max(to_run_ts, na.rm = TRUE),
-        inferred_trade_events = n(),
+        inferred_trade_events = sum((coalesce(players_out_n, 0L) + coalesce(players_in_n, 0L)) > 0L, na.rm = TRUE),
         inferred_players_out = sum(players_out_n, na.rm = TRUE),
         inferred_players_in = sum(players_in_n, na.rm = TRUE),
         inferred_trade_pairs = list(bind_rows(inferred_trade_pairs)),
@@ -1582,7 +1655,7 @@ checklist_coverage_status <- tibble(
     "Confirmed squad selection order and recent minutes for league rosters; global NRL team lists, role threats, and late omission probabilities remain unavailable.",
     "Confirmed official NRL fixture, venue, bye, kickoff timing, home/away, days-rest, travel heuristic, and rolling matchup difficulty via draw and ladder pages; position-specific weakness and confirmed major outs remain unavailable.",
     "Confirmed official NRL scores, ladder position, streak, form, points differential, and rolling attacking/defensive trends via draw and ladder pages; tries, linebreaks, possession, and edge-split stats remain unavailable.",
-    "Confirmed starting/current price, recent price movement, projected next price, and cash classification; breakeven trend and peak-cash timing remain unavailable.",
+    "Confirmed starting/current price and recent price movement; next-round price signal is now sanity-filtered against recent trend so stale external projections do not create absurd rises or crashes. Breakeven trend and peak-cash timing remain unavailable.",
     "Confirmed acquisition timing, prices, lock state, selection slot, and simple projections; next-3-week value movement and bye utility remain approximate or unavailable.",
     "Confirmed full squad history, cumulative change counts, and boost usage by team-round; exact opponent ins/outs are only inferred from snapshots unless exposed for the authenticated team.",
     "Ownership percentage and movement were not present in the confirmed source set.",
