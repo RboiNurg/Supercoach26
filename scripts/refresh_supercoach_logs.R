@@ -70,7 +70,11 @@ refresh_supercoach_logs <- function() {
     rounds_pulled = character(),
     fixture_rounds_pulled = character(),
     mutable_rounds = character(),
+    nrl_fixture_rounds_pulled = character(),
+    nrl_ladder_rounds_pulled = character(),
     ladder_rows_new = integer(),
+    nrl_fixture_rows_new = integer(),
+    nrl_ladder_rows_new = integer(),
     player_snapshot_rows_new = integer(),
     changed_team_rounds = integer(),
     failed_team_rounds = integer(),
@@ -97,6 +101,61 @@ refresh_supercoach_logs <- function() {
     is_partial_lockout = logical(),
     lockout_start = character(),
     lockout_end = character()
+  )
+
+  empty_nrl_fixture_source_history <- tibble(
+    run_ts = as.POSIXct(character()),
+    round = integer(),
+    fixture_key = character(),
+    source_url = character(),
+    match_state = character(),
+    match_mode = character(),
+    kickoff_at_utc = as.POSIXct(character(), tz = "UTC"),
+    venue = character(),
+    venue_city = character(),
+    team_abbrev = character(),
+    team_name_nrl = character(),
+    opponent_abbrev = character(),
+    opponent_name_nrl = character(),
+    home_away = character(),
+    bye_flag = logical(),
+    team_score = numeric(),
+    opponent_score = numeric(),
+    team_position = numeric(),
+    opponent_position = numeric()
+  )
+
+  empty_nrl_team_context_history <- tibble(
+    run_ts = as.POSIXct(character()),
+    round = integer(),
+    source_url = character(),
+    team_abbrev = character(),
+    team_name_nrl = character(),
+    ladder_position = numeric(),
+    ladder_movement = character(),
+    next_opponent_abbrev = character(),
+    next_opponent_name = character(),
+    next_is_bye = logical(),
+    games_played = numeric(),
+    wins = numeric(),
+    draws = numeric(),
+    losses = numeric(),
+    byes = numeric(),
+    points_for = numeric(),
+    points_against = numeric(),
+    points_difference = numeric(),
+    ladder_points = numeric(),
+    bonus_points = numeric(),
+    streak = character(),
+    form = character(),
+    average_losing_margin = numeric(),
+    average_winning_margin = numeric(),
+    home_record = character(),
+    away_record = character(),
+    day_record = character(),
+    night_record = character(),
+    players_used = numeric(),
+    premiership_odds = character()
   )
 
   empty_players_cf_history <- tibble(
@@ -135,6 +194,10 @@ refresh_supercoach_logs <- function() {
     mutable_rounds = character(),
     rounds_pulled = character(),
     fixture_rounds_pulled = character(),
+    nrl_fixture_rounds_pulled = character(),
+    nrl_ladder_rounds_pulled = character(),
+    nrl_fixture_rows_new = integer(),
+    nrl_ladder_rows_new = integer(),
     players_cf_changed_n = integer(),
     player_history_refreshed_n = integer(),
     competition_status = character()
@@ -144,6 +207,25 @@ refresh_supercoach_logs <- function() {
     vals <- x[!is.na(x)]
     if (length(vals) == 0) return(NA_real_)
     vals[[length(vals)]]
+  }
+
+  decode_html_json <- function(x) {
+    x %>%
+      gsub("&quot;", "\"", ., fixed = TRUE) %>%
+      gsub("&amp;", "&", ., fixed = TRUE) %>%
+      gsub("&#39;", "'", ., fixed = TRUE)
+  }
+
+  extract_q_data_json <- function(url, marker) {
+    txt <- http_get_text(url, stats_headers())
+    pattern <- sprintf('id="%s"[^>]*q-data="([^"]+)"', marker)
+    match <- stringr::str_match(txt, pattern)
+
+    if (is.na(match[1, 2])) {
+      stop("Could not extract q-data payload from ", url)
+    }
+
+    jsonlite::fromJSON(decode_html_json(match[1, 2]), simplifyVector = FALSE)
   }
 
   ladder_history_existing <- read_rds_if_exists(path_ladder_history, empty_ladder_history)
@@ -157,6 +239,8 @@ refresh_supercoach_logs <- function() {
   run_log_existing <- read_rds_if_exists(path_run_log, empty_run_log)
   player_price_history_existing <- read_rds_if_exists(path_player_price_history_2026, empty_player_price_history_2026)
   competition_state_history_existing <- read_rds_if_exists(path_competition_state_history, empty_competition_state_history)
+  nrl_fixture_source_history_existing <- read_rds_if_exists(path_nrl_fixture_source_history, empty_nrl_fixture_source_history)
+  nrl_team_context_history_existing <- read_rds_if_exists(path_nrl_team_context_history, empty_nrl_team_context_history)
   players_cf_history_existing <- read_rds_if_exists(path_players_cf_history, empty_players_cf_history)
   player_history_refresh_log_existing <- read_rds_if_exists(path_player_history_refresh_log, empty_player_history_refresh_log)
   source_refresh_log_existing <- read_rds_if_exists(path_source_refresh_log, empty_source_refresh_log)
@@ -171,6 +255,178 @@ refresh_supercoach_logs <- function() {
       team_name = as.character(name)
     )
 
+  team_name_lookup <- bind_rows(
+    teams_reference %>%
+      transmute(team_abbrev, team_name_raw = team_name),
+    tibble(
+      team_abbrev = c("WST"),
+      team_name_raw = c("Wests Tigers")
+    )
+  ) %>%
+    mutate(team_name_norm = normalise_team_name(team_name_raw)) %>%
+    distinct(team_name_norm, .keep_all = TRUE)
+
+  nrl_team_abbrev <- function(team_name_raw) {
+    team_name_norm <- normalise_team_name(safe_chr(team_name_raw, ""))
+    team_name_lookup %>%
+      filter(team_name_norm == !!team_name_norm) %>%
+      pull(team_abbrev) %>%
+      first() %>%
+      `%||%`(NA_character_)
+  }
+
+  parse_ladder_stat <- function(stats_obj, field_name) {
+    safe_dbl(stats_obj[[field_name]])
+  }
+
+  parse_team_position <- function(x) {
+    suppressWarnings(
+      as.numeric(
+        stringr::str_extract(
+          safe_chr(x),
+          "\\d+"
+        )
+      )
+    )
+  }
+
+  get_nrl_draw_round <- function(round_value) {
+    source_url <- build_url("https://www.nrl.com/draw/", query = list(round = round_value))
+    draw_payload <- extract_q_data_json(source_url, "vue-draw")
+
+    match_rows <- purrr::map_dfr(draw_payload$fixtures %||% list(), function(z) {
+      fixture_key <- safe_chr(z$matchCentreUrl)
+      kickoff_at_utc <- safe_posixct(z$clock$kickOffTimeLong)
+      venue <- safe_chr(z$venue)
+      venue_city <- safe_chr(z$venueCity)
+      match_state <- safe_chr(z$matchState)
+      match_mode <- safe_chr(z$matchMode)
+      round_number <- safe_int(stringr::str_extract(safe_chr(z$roundTitle), "\\d+"), round_value)
+      home_team_name <- safe_chr(z$homeTeam$nickName)
+      away_team_name <- safe_chr(z$awayTeam$nickName)
+      home_team_abbrev <- nrl_team_abbrev(home_team_name)
+      away_team_abbrev <- nrl_team_abbrev(away_team_name)
+
+      bind_rows(
+        tibble(
+          run_ts = run_ts,
+          round = round_number,
+          fixture_key = fixture_key,
+          source_url = source_url,
+          match_state = match_state,
+          match_mode = match_mode,
+          kickoff_at_utc = kickoff_at_utc,
+          venue = venue,
+          venue_city = venue_city,
+          team_abbrev = home_team_abbrev,
+          team_name_nrl = home_team_name,
+          opponent_abbrev = away_team_abbrev,
+          opponent_name_nrl = away_team_name,
+          home_away = "home",
+          bye_flag = FALSE,
+          team_score = safe_dbl(z$homeTeam$score),
+          opponent_score = safe_dbl(z$awayTeam$score),
+          team_position = parse_team_position(z$homeTeam$teamPosition),
+          opponent_position = parse_team_position(z$awayTeam$teamPosition)
+        ),
+        tibble(
+          run_ts = run_ts,
+          round = round_number,
+          fixture_key = fixture_key,
+          source_url = source_url,
+          match_state = match_state,
+          match_mode = match_mode,
+          kickoff_at_utc = kickoff_at_utc,
+          venue = venue,
+          venue_city = venue_city,
+          team_abbrev = away_team_abbrev,
+          team_name_nrl = away_team_name,
+          opponent_abbrev = home_team_abbrev,
+          opponent_name_nrl = home_team_name,
+          home_away = "away",
+          bye_flag = FALSE,
+          team_score = safe_dbl(z$awayTeam$score),
+          opponent_score = safe_dbl(z$homeTeam$score),
+          team_position = parse_team_position(z$awayTeam$teamPosition),
+          opponent_position = parse_team_position(z$homeTeam$teamPosition)
+        )
+      )
+    })
+
+    bye_rows <- purrr::map_dfr(draw_payload$byes %||% list(), function(z) {
+      team_name_nrl <- safe_chr(z$teamNickName)
+
+      tibble(
+        run_ts = run_ts,
+        round = safe_int(stringr::str_extract(safe_chr(z$roundTitle), "\\d+"), round_value),
+        fixture_key = paste0("bye_round_", round_value, "_", normalise_team_name(team_name_nrl)),
+        source_url = source_url,
+        match_state = "Bye",
+        match_mode = safe_chr(z$type),
+        kickoff_at_utc = as.POSIXct(NA, tz = "UTC"),
+        venue = NA_character_,
+        venue_city = NA_character_,
+        team_abbrev = nrl_team_abbrev(team_name_nrl),
+        team_name_nrl = team_name_nrl,
+        opponent_abbrev = NA_character_,
+        opponent_name_nrl = NA_character_,
+        home_away = "bye",
+        bye_flag = TRUE,
+        team_score = NA_real_,
+        opponent_score = NA_real_,
+        team_position = NA_real_,
+        opponent_position = NA_real_
+      )
+    })
+
+    bind_rows(match_rows, bye_rows) %>%
+      filter(!is.na(team_abbrev))
+  }
+
+  get_nrl_ladder_round <- function(round_value) {
+    source_url <- build_url("https://www.nrl.com/ladder/", query = list(round = round_value))
+    ladder_payload <- extract_q_data_json(source_url, "vue-ladder")
+
+    purrr::map_dfr(ladder_payload$positions %||% list(), function(z) {
+      team_name_nrl <- safe_chr(z$teamNickname)
+      stats_obj <- z$stats %||% list()
+
+      tibble(
+        run_ts = run_ts,
+        round = round_value,
+        source_url = source_url,
+        team_abbrev = nrl_team_abbrev(team_name_nrl),
+        team_name_nrl = team_name_nrl,
+        ladder_position = NA_real_,
+        ladder_movement = safe_chr(z$movement),
+        next_opponent_abbrev = nrl_team_abbrev((z[["next"]] %||% list())[["nickname"]]),
+        next_opponent_name = safe_chr((z[["next"]] %||% list())[["nickname"]]),
+        next_is_bye = safe_lgl((z[["next"]] %||% list())[["isBye"]], FALSE),
+        games_played = parse_ladder_stat(stats_obj, "played"),
+        wins = parse_ladder_stat(stats_obj, "wins"),
+        draws = parse_ladder_stat(stats_obj, "drawn"),
+        losses = parse_ladder_stat(stats_obj, "lost"),
+        byes = parse_ladder_stat(stats_obj, "byes"),
+        points_for = parse_ladder_stat(stats_obj, "points for"),
+        points_against = parse_ladder_stat(stats_obj, "points against"),
+        points_difference = parse_ladder_stat(stats_obj, "points difference"),
+        ladder_points = parse_ladder_stat(stats_obj, "points"),
+        bonus_points = parse_ladder_stat(stats_obj, "bonus points"),
+        streak = safe_chr(stats_obj[["streak"]]),
+        form = safe_chr(stats_obj[["form"]]),
+        average_losing_margin = parse_ladder_stat(stats_obj, "average losing margin"),
+        average_winning_margin = parse_ladder_stat(stats_obj, "average winning margin"),
+        home_record = safe_chr(stats_obj[["home record"]]),
+        away_record = safe_chr(stats_obj[["away record"]]),
+        day_record = safe_chr(stats_obj[["day record"]]),
+        night_record = safe_chr(stats_obj[["night record"]]),
+        players_used = parse_ladder_stat(stats_obj, "players used"),
+        premiership_odds = safe_chr(stats_obj[["odds"]])
+      )
+    }) %>%
+      filter(!is.na(team_abbrev))
+  }
+
   current_round <- safe_int(settings$competition$current_round)
   next_round <- safe_int(settings$competition$next_round)
   competition_status <- safe_chr(settings$competition$status)
@@ -181,6 +437,22 @@ refresh_supercoach_logs <- function() {
 
   mutable_rounds <- sort(unique(c(max(1L, current_round - 1L), current_round)))
   first_run <- nrow(ladder_history_existing) == 0 || nrow(team_round_signatures_existing) == 0
+  max_round_available <- max(season_rounds, na.rm = TRUE)
+
+  nrl_fixture_rounds_to_pull <- if (nrow(nrl_fixture_source_history_existing) == 0) {
+    season_rounds
+  } else {
+    sort(unique(c(
+      max(1L, current_round - 1L),
+      seq.int(current_round, min(max_round_available, current_round + 5L))
+    )))
+  }
+
+  nrl_ladder_rounds_to_pull <- if (nrow(nrl_team_context_history_existing) == 0) {
+    seq_len(current_round)
+  } else {
+    mutable_rounds
+  }
 
   competition_state_history <- bind_rows(
     competition_state_history_existing,
@@ -198,6 +470,26 @@ refresh_supercoach_logs <- function() {
   ) %>%
     distinct(run_ts, .keep_all = TRUE) %>%
     arrange(run_ts)
+
+  nrl_fixture_source_history_new <- map_dfr(nrl_fixture_rounds_to_pull, get_nrl_draw_round)
+  nrl_fixture_source_history <- bind_rows(
+    nrl_fixture_source_history_existing,
+    nrl_fixture_source_history_new
+  ) %>%
+    distinct(run_ts, round, team_abbrev, .keep_all = TRUE) %>%
+    arrange(run_ts, round, team_abbrev)
+
+  nrl_team_context_history_new <- map_dfr(nrl_ladder_rounds_to_pull, get_nrl_ladder_round) %>%
+    group_by(round) %>%
+    mutate(ladder_position = row_number()) %>%
+    ungroup()
+
+  nrl_team_context_history <- bind_rows(
+    nrl_team_context_history_existing,
+    nrl_team_context_history_new
+  ) %>%
+    distinct(run_ts, round, team_abbrev, .keep_all = TRUE) %>%
+    arrange(run_ts, round, ladder_position, team_abbrev)
 
   players_cf_list <- sc_get_json("/players-cf")
 
@@ -632,7 +924,11 @@ refresh_supercoach_logs <- function() {
       rounds_pulled = paste(rounds_to_pull, collapse = ","),
       fixture_rounds_pulled = paste(fixture_rounds_to_pull, collapse = ","),
       mutable_rounds = paste(mutable_rounds, collapse = ","),
+      nrl_fixture_rounds_pulled = paste(nrl_fixture_rounds_to_pull, collapse = ","),
+      nrl_ladder_rounds_pulled = paste(nrl_ladder_rounds_to_pull, collapse = ","),
       ladder_rows_new = nrow(ladder_history_new),
+      nrl_fixture_rows_new = nrow(nrl_fixture_source_history_new),
+      nrl_ladder_rows_new = nrow(nrl_team_context_history_new),
       player_snapshot_rows_new = nrow(team_players_snapshots_new),
       changed_team_rounds = nrow(team_round_signatures_new),
       failed_team_rounds = sum(!team_round_results$pull_ok),
@@ -651,6 +947,10 @@ refresh_supercoach_logs <- function() {
       mutable_rounds = paste(mutable_rounds, collapse = ","),
       rounds_pulled = paste(rounds_to_pull, collapse = ","),
       fixture_rounds_pulled = paste(fixture_rounds_to_pull, collapse = ","),
+      nrl_fixture_rounds_pulled = paste(nrl_fixture_rounds_to_pull, collapse = ","),
+      nrl_ladder_rounds_pulled = paste(nrl_ladder_rounds_to_pull, collapse = ","),
+      nrl_fixture_rows_new = nrow(nrl_fixture_source_history_new),
+      nrl_ladder_rows_new = nrow(nrl_team_context_history_new),
       players_cf_changed_n = nrow(players_cf_history_new),
       player_history_refreshed_n = nrow(players_to_refresh_tbl),
       competition_status = competition_status
@@ -666,6 +966,8 @@ refresh_supercoach_logs <- function() {
   saveRDS(actual_trade_history, path_actual_trade_history)
   saveRDS(inferred_changes, path_inferred_changes)
   saveRDS(competition_state_history, path_competition_state_history)
+  saveRDS(nrl_fixture_source_history, path_nrl_fixture_source_history)
+  saveRDS(nrl_team_context_history, path_nrl_team_context_history)
   saveRDS(players_cf_history, path_players_cf_history)
   saveRDS(players_cf_latest, path_players_cf_latest)
   saveRDS(player_history_refresh_log, path_player_history_refresh_log)
@@ -713,6 +1015,8 @@ refresh_supercoach_logs <- function() {
     inferred_changes = inferred_changes,
     run_log = run_log,
     competition_state_history = competition_state_history,
+    nrl_fixture_source_history = nrl_fixture_source_history,
+    nrl_team_context_history = nrl_team_context_history,
     players_cf_history = players_cf_history,
     players_cf_latest = players_cf_latest,
     player_history_refresh_log = player_history_refresh_log,

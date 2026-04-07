@@ -21,6 +21,8 @@ This script writes the following `.rds` files under the league-specific data fol
 - `actual_trade_history.rds`
 - `inferred_changes.rds`
 - `competition_state_history.rds`
+- `nrl_fixture_source_history.rds`
+- `nrl_team_context_history.rds`
 - `players_cf_history.rds`
 - `players_cf_latest.rds`
 - `player_history_refresh_log.rds`
@@ -87,6 +89,8 @@ path_team_round_stats_history <- file.path(data_dir, "team_round_stats_history.r
 path_actual_trade_history <- file.path(data_dir, "actual_trade_history.rds")
 path_inferred_changes <- file.path(data_dir, "inferred_changes.rds")
 path_competition_state_history <- file.path(data_dir, "competition_state_history.rds")
+path_nrl_fixture_source_history <- file.path(data_dir, "nrl_fixture_source_history.rds")
+path_nrl_team_context_history <- file.path(data_dir, "nrl_team_context_history.rds")
 path_players_cf_history <- file.path(data_dir, "players_cf_history.rds")
 path_players_cf_latest <- file.path(data_dir, "players_cf_latest.rds")
 path_player_history_refresh_log <- file.path(data_dir, "player_history_refresh_log.rds")
@@ -135,6 +139,17 @@ normalise_player_name <- function(x) {
     stringr::str_replace_all(" ", "")
 }
 
+normalise_team_name <- function(x) {
+  out <- x %>%
+    stringr::str_to_lower() %>%
+    stringr::str_replace_all("&amp;", "and") %>%
+    stringr::str_replace_all("[^a-z0-9]", "")
+
+  out[out == "weststigers"] <- "tigers"
+  out[out == "canterburybankstownbulldogs"] <- "bulldogs"
+  out
+}
+
 coalesce_chr <- function(x) {
   x <- as.character(x)
   x[is.na(x)] <- ""
@@ -159,6 +174,11 @@ safe_dbl <- function(x, default = NA_real_) {
 safe_lgl <- function(x, default = NA) {
   if (is.null(x) || length(x) == 0) return(default)
   as.logical(x[[1]])
+}
+
+safe_posixct <- function(x, default = as.POSIXct(NA)) {
+  if (is.null(x) || length(x) == 0) return(default)
+  suppressWarnings(as.POSIXct(x[[1]], tz = "UTC"))
 }
 
 list_to_chr <- function(x) {
@@ -244,6 +264,39 @@ roll_mean_right <- function(x, k) {
       out[i] <- mean(window)
     }
   }
+  out
+}
+
+roll_mean_prev_non_na <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) == 0) return(out)
+
+  for (i in seq_along(x)) {
+    if (i == 1) next
+    start_idx <- max(1L, i - k)
+    window <- x[start_idx:(i - 1L)]
+    window <- window[!is.na(window)]
+    if (length(window) > 0) {
+      out[i] <- mean(window)
+    }
+  }
+
+  out
+}
+
+lookahead_mean_non_na <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) == 0) return(out)
+
+  for (i in seq_along(x)) {
+    end_idx <- min(length(x), i + k - 1L)
+    window <- x[i:end_idx]
+    window <- window[!is.na(window)]
+    if (length(window) > 0) {
+      out[i] <- mean(window)
+    }
+  }
+
   out
 }
 
@@ -792,55 +845,208 @@ team_list_role_certainty <- team_players_latest %>%
     injury_cover_flag, return_threat_flag
   )
 
-fixture_matchup_table <- tibble(
-  run_ts = as.POSIXct(character()),
-  round = integer(),
-  team_abbrev = character(),
-  opponent = character(),
-  venue = character(),
-  home_away = character(),
-  days_rest = numeric(),
-  travel_burden = character(),
-  short_turnaround_flag = logical(),
-  opponent_recent_form = numeric(),
-  team_recent_form = numeric(),
-  projected_game_total = numeric(),
-  projected_team_scoring_environment = numeric(),
-  opponent_defensive_weakness_by_position = character(),
-  opponent_attacking_weakness_by_position = character(),
-  team_style_indicator = character(),
-  bye_flag = logical(),
-  major_outs_opponent = character(),
-  major_outs_team = character(),
-  matchup_rating_by_player = numeric(),
-  matchup_rating_by_team = numeric(),
-  next_2_rounds_difficulty = numeric(),
-  next_3_rounds_difficulty = numeric(),
-  next_5_rounds_difficulty = numeric(),
-  schedule_swing_indicator = character()
+# Real NRL fixture context comes from official NRL draw and ladder pages.
+latest_nrl_fixture_source <- nrl_fixture_source_history %>%
+  group_by(round, team_abbrev) %>%
+  slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+latest_nrl_team_context_source <- nrl_team_context_history %>%
+  group_by(round, team_abbrev) %>%
+  slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+nrl_home_reference <- tibble(
+  team_abbrev = c("BRO", "BUL", "CBR", "DOL", "GCT", "MEL", "MNL", "NEW", "NQC", "NZL", "PAR", "PTH", "SHA", "STG", "STH", "SYD", "WST"),
+  home_region = c("brisbane", "sydney", "canberra", "brisbane", "goldcoast", "melbourne", "sydney", "newcastle", "townsville", "auckland", "sydney", "sydney", "sydney", "wollongong", "sydney", "sydney", "sydney")
 )
 
-team_performance_context <- tibble(
-  run_ts = as.POSIXct(character()),
-  team_abbrev = character(),
-  round = integer(),
-  points_scored = numeric(),
-  points_conceded = numeric(),
-  tries_scored = numeric(),
-  tries_conceded = numeric(),
-  linebreaks_for = numeric(),
-  linebreaks_against = numeric(),
-  possession_share = numeric(),
-  territory_indicators = character(),
-  completion_rate = numeric(),
-  attacking_trend_last_3 = numeric(),
-  attacking_trend_last_5 = numeric(),
-  defensive_trend_last_3 = numeric(),
-  defensive_trend_last_5 = numeric(),
-  left_edge_vulnerability = numeric(),
-  right_edge_vulnerability = numeric(),
-  middle_defensive_weakness = numeric()
+venue_region_reference <- tibble(
+  venue_city = c("Auckland", "Brisbane", "Canberra", "Coffs Harbour", "Darwin", "Gold Coast", "Melbourne", "Mudgee", "Newcastle", "Perth", "Redcliffe", "Sydney", "Townsville", "Wollongong"),
+  venue_region = c("auckland", "brisbane", "canberra", "regional_nsw", "darwin", "goldcoast", "melbourne", "regional_nsw", "newcastle", "perth", "brisbane", "sydney", "townsville", "wollongong")
 )
+
+team_schedule <- latest_nrl_fixture_source %>%
+  left_join(nrl_home_reference, by = "team_abbrev") %>%
+  left_join(venue_region_reference, by = "venue_city") %>%
+  arrange(team_abbrev, round, kickoff_at_utc) %>%
+  group_by(team_abbrev) %>%
+  mutate(
+    days_rest = as.numeric(difftime(kickoff_at_utc, lag(kickoff_at_utc), units = "days")),
+    travel_burden = case_when(
+      bye_flag %in% TRUE ~ "bye",
+      home_away == "home" ~ "home",
+      is.na(venue_region) | is.na(home_region) ~ NA_character_,
+      venue_region == home_region ~ "low",
+      home_region == "sydney" & venue_region %in% c("wollongong", "newcastle", "regional_nsw", "canberra") ~ "medium",
+      home_region %in% c("brisbane", "goldcoast") & venue_region %in% c("brisbane", "goldcoast") ~ "medium",
+      TRUE ~ "high"
+    ),
+    short_turnaround_flag = !is.na(days_rest) & days_rest < 6
+  ) %>%
+  ungroup()
+
+team_results_by_round <- team_schedule %>%
+  mutate(
+    points_scored = if_else(match_state == "FullTime", team_score, NA_real_),
+    points_conceded = if_else(match_state == "FullTime", opponent_score, NA_real_),
+    result_points = case_when(
+      is.na(points_scored) | is.na(points_conceded) ~ NA_real_,
+      points_scored > points_conceded ~ 1,
+      points_scored < points_conceded ~ 0,
+      TRUE ~ 0.5
+    )
+  ) %>%
+  arrange(team_abbrev, round, kickoff_at_utc) %>%
+  group_by(team_abbrev) %>%
+  mutate(
+    attacking_trend_last_3 = roll_mean_prev_non_na(points_scored, 3),
+    attacking_trend_last_5 = roll_mean_prev_non_na(points_scored, 5),
+    defensive_trend_last_3 = roll_mean_prev_non_na(points_conceded, 3),
+    defensive_trend_last_5 = roll_mean_prev_non_na(points_conceded, 5),
+    recent_form_last_3 = roll_mean_prev_non_na(result_points, 3)
+  ) %>%
+  ungroup()
+
+team_performance_context <- team_results_by_round %>%
+  left_join(
+    latest_nrl_team_context_source %>%
+      select(
+        round, team_abbrev, ladder_position, ladder_points, points_difference,
+        streak, form, home_record, away_record, day_record, night_record,
+        players_used, premiership_odds
+      ),
+    by = c("round", "team_abbrev")
+  ) %>%
+  transmute(
+    run_ts = run_ts,
+    team_abbrev,
+    round,
+    points_scored,
+    points_conceded,
+    tries_scored = NA_real_,
+    tries_conceded = NA_real_,
+    linebreaks_for = NA_real_,
+    linebreaks_against = NA_real_,
+    possession_share = NA_real_,
+    territory_indicators = case_when(
+      bye_flag %in% TRUE ~ "bye",
+      TRUE ~ paste(
+        paste0("ladder_pos=", coalesce_chr(ladder_position)),
+        paste0("ladder_points=", coalesce_chr(ladder_points)),
+        paste0("points_diff=", coalesce_chr(points_difference)),
+        paste0("streak=", coalesce_chr(streak)),
+        paste0("form=", coalesce_chr(form)),
+        paste0("home_record=", coalesce_chr(home_record)),
+        paste0("away_record=", coalesce_chr(away_record)),
+        paste0("day_record=", coalesce_chr(day_record)),
+        paste0("night_record=", coalesce_chr(night_record)),
+        paste0("players_used=", coalesce_chr(players_used)),
+        paste0("premiership_odds=", coalesce_chr(premiership_odds)),
+        sep = "; "
+      )
+    ),
+    completion_rate = NA_real_,
+    attacking_trend_last_3,
+    attacking_trend_last_5,
+    defensive_trend_last_3,
+    defensive_trend_last_5,
+    left_edge_vulnerability = NA_real_,
+    right_edge_vulnerability = NA_real_,
+    middle_defensive_weakness = NA_real_
+  )
+
+matchup_context <- team_results_by_round %>%
+  select(
+    round, team_abbrev,
+    team_recent_form = recent_form_last_3,
+    team_attacking_trend_last_3 = attacking_trend_last_3,
+    team_defensive_trend_last_3 = defensive_trend_last_3
+  )
+
+fixture_matchup_table <- team_schedule %>%
+  left_join(matchup_context, by = c("round", "team_abbrev")) %>%
+  left_join(
+    matchup_context %>%
+      transmute(
+        round,
+        opponent_abbrev = team_abbrev,
+        opponent_recent_form = team_recent_form,
+        opponent_attacking_trend_last_3 = team_attacking_trend_last_3,
+        opponent_defensive_trend_last_3 = team_defensive_trend_last_3
+      ),
+    by = c("round", "opponent_abbrev")
+  ) %>%
+  mutate(
+    projected_team_scoring_environment = if_else(
+      bye_flag %in% TRUE,
+      NA_real_,
+      rowMeans(cbind(team_attacking_trend_last_3, opponent_defensive_trend_last_3), na.rm = TRUE)
+    ),
+    projected_game_total = if_else(
+      bye_flag %in% TRUE,
+      NA_real_,
+      rowMeans(
+        cbind(
+          team_attacking_trend_last_3 + opponent_defensive_trend_last_3,
+          opponent_attacking_trend_last_3 + team_defensive_trend_last_3
+        ),
+        na.rm = TRUE
+      )
+    ),
+    projected_team_scoring_environment = if_else(is.nan(projected_team_scoring_environment), NA_real_, projected_team_scoring_environment),
+    projected_game_total = if_else(is.nan(projected_game_total), NA_real_, projected_game_total),
+    matchup_rating_by_team = projected_team_scoring_environment,
+    matchup_rating_by_player = projected_team_scoring_environment,
+    team_style_indicator = case_when(
+      bye_flag %in% TRUE ~ "bye",
+      !is.na(team_attacking_trend_last_3) & team_attacking_trend_last_3 >= 24 ~ "attack_first",
+      !is.na(team_defensive_trend_last_3) & team_defensive_trend_last_3 <= 16 ~ "defensive_grind",
+      !is.na(team_attacking_trend_last_3) ~ "balanced",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  arrange(team_abbrev, round, kickoff_at_utc) %>%
+  group_by(team_abbrev) %>%
+  mutate(
+    next_2_rounds_difficulty = lookahead_mean_non_na(matchup_rating_by_team, 2),
+    next_3_rounds_difficulty = lookahead_mean_non_na(matchup_rating_by_team, 3),
+    next_5_rounds_difficulty = lookahead_mean_non_na(matchup_rating_by_team, 5),
+    schedule_swing_indicator = case_when(
+      is.na(next_2_rounds_difficulty) | is.na(next_5_rounds_difficulty) ~ NA_character_,
+      next_2_rounds_difficulty >= next_5_rounds_difficulty + 3 ~ "easier_short_term",
+      next_2_rounds_difficulty <= next_5_rounds_difficulty - 3 ~ "harder_short_term",
+      TRUE ~ "stable"
+    )
+  ) %>%
+  ungroup() %>%
+  transmute(
+    run_ts = run_ts,
+    round,
+    team_abbrev,
+    opponent = opponent_abbrev,
+    venue,
+    home_away,
+    days_rest,
+    travel_burden,
+    short_turnaround_flag,
+    opponent_recent_form,
+    team_recent_form,
+    projected_game_total,
+    projected_team_scoring_environment,
+    opponent_defensive_weakness_by_position = NA_character_,
+    opponent_attacking_weakness_by_position = NA_character_,
+    team_style_indicator,
+    bye_flag,
+    major_outs_opponent = NA_character_,
+    major_outs_team = NA_character_,
+    matchup_rating_by_player,
+    matchup_rating_by_team,
+    next_2_rounds_difficulty,
+    next_3_rounds_difficulty,
+    next_5_rounds_difficulty,
+    schedule_swing_indicator
+  )
 
 cash_generation_model <- player_catalog %>%
   left_join(initialvalue_catalog, by = c("full_name" = "player_name", "team_abbrev", "name_norm")) %>%
@@ -882,9 +1088,19 @@ squad_round_enriched <- team_players_latest %>%
     by = "user_team_id"
   ) %>%
   left_join(
+    player_catalog %>%
+      select(player_id, team_abbrev),
+    by = "player_id"
+  ) %>%
+  left_join(
     master_player_round_latest %>%
       select(player_id, full_name, positions, locked_flag, status),
     by = "player_id"
+  ) %>%
+  left_join(
+    fixture_matchup_table %>%
+      select(round, team_abbrev, bye_flag, next_3_rounds_difficulty),
+    by = c("round", "team_abbrev")
   ) %>%
   group_by(user_team_id, player_id) %>%
   mutate(
@@ -914,7 +1130,7 @@ squad_round_enriched <- team_players_latest %>%
       TRUE ~ "standard"
     ),
     captaincy_value = avg_3,
-    bye_usefulness = NA_real_,
+    bye_usefulness = if_else(bye_flag %in% TRUE, 0, next_3_rounds_difficulty),
     dpp_flexibility_usefulness = if_else(str_detect(coalesce(positions, ""), "/"), 1, 0),
     injury_suspension_risk = status,
     currently_locked = locked_flag,
@@ -943,6 +1159,7 @@ latest_team_round_stats <- team_round_stats_history %>%
   slice_max(run_ts, n = 1, with_ties = FALSE) %>%
   ungroup()
 
+# This table tracks SuperCoach league opponents and inferred fantasy trades, not real NRL matchups.
 opponent_behaviour_history <- team_players_latest %>%
   group_by(user_team_id, round) %>%
   summarise(
@@ -1317,8 +1534,8 @@ checklist_coverage_status <- tibble(
     "partial",
     "partial",
     "partial",
-    "unavailable",
-    "unavailable",
+    "partial",
+    "partial",
     "partial",
     "partial",
     "partial",
@@ -1335,8 +1552,8 @@ checklist_coverage_status <- tibble(
     "/players-cf, initialvalue.php, data-yearplot.php",
     "data-yearplot.php",
     "/userteams/{id}/statsPlayers, data-yearplot.php",
-    "Unavailable from confirmed sources",
-    "Unavailable from confirmed sources",
+    "https://www.nrl.com/draw/?round={round}, https://www.nrl.com/ladder/?round={round}",
+    "https://www.nrl.com/draw/?round={round}, https://www.nrl.com/ladder/?round={round}",
     "initialvalue.php, data-yearplot.php",
     "/userteams/{id}/statsPlayers, /players-cf, data-yearplot.php",
     "/userteams/{id}/statsPlayers, ladderAndFixtures",
@@ -1353,8 +1570,8 @@ checklist_coverage_status <- tibble(
     "Current price, status, team, DPP, history lists, and recent averages are confirmed; breakeven, ownership, role, goal-kicking, and return timeline remain unavailable.",
     "Confirmed score, minutes, price-derived volatility, floor, ceiling, and PPM; base-stat components are unavailable from confirmed sources.",
     "Confirmed squad selection order and recent minutes for league rosters; global NRL team lists, role threats, and late omission probabilities remain unavailable.",
-    "No confirmed NRL fixture endpoint with venue/rest/matchup fields was identified in the validated source set.",
-    "No confirmed NRL team performance endpoint with tries, linebreaks, possession, or defensive splits was identified in the validated source set.",
+    "Confirmed official NRL fixture, venue, bye, kickoff timing, home/away, days-rest, travel heuristic, and rolling matchup difficulty via draw and ladder pages; position-specific weakness and confirmed major outs remain unavailable.",
+    "Confirmed official NRL scores, ladder position, streak, form, points differential, and rolling attacking/defensive trends via draw and ladder pages; tries, linebreaks, possession, and edge-split stats remain unavailable.",
     "Confirmed starting/current price, recent price movement, projected next price, and cash classification; breakeven trend and peak-cash timing remain unavailable.",
     "Confirmed acquisition timing, prices, lock state, selection slot, and simple projections; next-3-week value movement and bye utility remain approximate or unavailable.",
     "Confirmed full squad history, cumulative change counts, and boost usage by team-round; exact opponent ins/outs are only inferred from snapshots unless exposed for the authenticated team.",
@@ -1362,8 +1579,8 @@ checklist_coverage_status <- tibble(
     "Confirmed current active, injury/suspension, and lock indicators from /players-cf; expected return dates remain unavailable.",
     "Captain and vice-captain selections were not present in the confirmed source set.",
     "Trade comparison scenarios are not available from confirmed sources and were not fabricated.",
-    "Confirmed structural metrics from squad composition and lock state; bye resilience remains limited without a confirmed NRL fixture source.",
-    "Confirmed competition refresh trigger from /settings lockout window; per-game rolling refresh triggers remain unavailable without a confirmed NRL fixture feed.",
+    "Confirmed structural metrics from squad composition and lock state; fixture-linked bye and schedule context are now available for downstream joins.",
+    "Confirmed competition refresh trigger from /settings lockout window; official NRL draw now supplies per-round matchup refresh context.",
     "Confirmed long-horizon summary uses current squad value, trades, boosts, and bye rounds; deeper future projection fields remain partial."
   )
 )
