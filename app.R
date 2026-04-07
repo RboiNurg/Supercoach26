@@ -214,6 +214,111 @@ latest_team_round_stats <- function(team_round_stats_history) {
     )
 }
 
+latest_round_by_team <- function(tbl, team_ids = NULL) {
+  if (is.null(tbl) || !nrow(tbl) || !"user_team_id" %in% names(tbl) || !"round" %in% names(tbl)) {
+    return(NULL)
+  }
+
+  working <- tbl
+  if (!is.null(team_ids)) {
+    working <- working %>% filter(user_team_id %in% team_ids)
+  }
+
+  working %>%
+    group_by(user_team_id) %>%
+    summarise(latest_round = max(round, na.rm = TRUE), .groups = "drop")
+}
+
+latest_team_players_snapshot <- function(team_players_latest, team_ids = NULL) {
+  latest_rounds <- latest_round_by_team(team_players_latest, team_ids)
+  if (is.null(latest_rounds) || !nrow(latest_rounds)) {
+    return(NULL)
+  }
+
+  team_players_latest %>%
+    inner_join(latest_rounds, by = "user_team_id") %>%
+    filter(round == latest_round) %>%
+    arrange(user_team_id, player_id, desc(run_ts)) %>%
+    distinct(user_team_id, player_id, .keep_all = TRUE)
+}
+
+latest_team_squad_snapshot <- function(squad_round_enriched, team_ids = NULL) {
+  latest_rounds <- latest_round_by_team(squad_round_enriched, team_ids)
+  if (is.null(latest_rounds) || !nrow(latest_rounds)) {
+    return(NULL)
+  }
+
+  squad_round_enriched %>%
+    inner_join(latest_rounds, by = "user_team_id") %>%
+    filter(round == latest_round) %>%
+    arrange(user_team_id, player_id, desc(run_ts)) %>%
+    distinct(user_team_id, player_id, .keep_all = TRUE)
+}
+
+next_team_fixture_lookup <- function(
+  nrl_fixture_source_history,
+  fixture_matchup,
+  now = Sys.time(),
+  close_buffer_hours = 3
+) {
+  if (is.null(nrl_fixture_source_history) || !nrow(nrl_fixture_source_history)) {
+    return(NULL)
+  }
+
+  now_utc <- as.POSIXct(now, tz = "UTC")
+
+  future_fixtures <- nrl_fixture_source_history %>%
+    arrange(desc(run_ts)) %>%
+    group_by(fixture_key, team_abbrev) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    mutate(
+      kickoff_at_utc = as.POSIXct(kickoff_at_utc, tz = "UTC"),
+      match_state_norm = tolower(trimws(coalesce(match_state, ""))),
+      fixture_closed = case_when(
+        bye_flag %in% TRUE ~ FALSE,
+        match_state_norm %in% c("fulltime", "full time", "post", "completed", "complete") ~ TRUE,
+        !is.na(kickoff_at_utc) & now_utc >= kickoff_at_utc + close_buffer_hours * 60 * 60 ~ TRUE,
+        TRUE ~ FALSE
+      )
+    ) %>%
+    filter(!fixture_closed, !bye_flag %in% TRUE, !is.na(kickoff_at_utc)) %>%
+    arrange(team_abbrev, kickoff_at_utc) %>%
+    group_by(team_abbrev) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      team_abbrev,
+      upcoming_round = round,
+      next_opponent = opponent_abbrev,
+      next_kickoff_utc = kickoff_at_utc
+    )
+
+  if (is.null(fixture_matchup) || !nrow(fixture_matchup)) {
+    return(future_fixtures)
+  }
+
+  future_fixtures %>%
+    left_join(
+      fixture_matchup %>%
+        arrange(desc(run_ts)) %>%
+        group_by(team_abbrev, round) %>%
+        slice_head(n = 1) %>%
+        ungroup() %>%
+        transmute(
+          team_abbrev,
+          upcoming_round = round,
+          home_away,
+          bye_flag,
+          next_matchup_rating = matchup_rating_by_player,
+          next_matchup_rating_team = matchup_rating_by_team,
+          next_3_rounds_difficulty,
+          schedule_swing_indicator
+        ),
+      by = c("team_abbrev", "upcoming_round")
+    )
+}
+
 infer_effective_round_from_nrl <- function(
   game_rules,
   nrl_fixture_source_history,
@@ -598,7 +703,7 @@ ui <- page_navbar(
     div(
       class = "metric-grid",
       metric_card("Current Round", "current_round_text"),
-      metric_card("Snapshot Round", "snapshot_round_text"),
+      metric_card("League Finance Snapshot", "snapshot_round_text"),
       metric_card("Last Data Refresh", "last_refresh_text"),
       metric_card("Current Matchup", "matchup_text"),
       metric_card("Latest GPT Pack", "latest_export_text")
@@ -615,7 +720,7 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("Fixture Runway"),
       plotOutput("fixture_runway_plot", height = "340px"),
-      card_footer(class = "section-note", "Next five rounds of official NRL fixture difficulty for your side and this week's opponent.")
+      card_footer(class = "section-note", "Weighted difficulty for each side's latest known squad, using each club's next scheduled NRL fixture from the official draw rather than a blind next-round jump.")
     ),
     card(
       class = "sc-card",
@@ -638,7 +743,8 @@ ui <- page_navbar(
         class = "sc-card",
         full_screen = TRUE,
         card_header("Head-to-Head Comparison"),
-        plotOutput("matchup_compare_plot", height = "360px")
+        plotOutput("matchup_compare_plot", height = "360px"),
+        card_footer(class = "section-note", "Compares bank, team value, average projected player score, and DPP depth from each side's latest available squad snapshot.")
       ),
       card(
         class = "sc-card",
@@ -662,13 +768,15 @@ ui <- page_navbar(
         class = "sc-card",
         full_screen = TRUE,
         card_header("Opponent Trade Timeline"),
-        plotOutput("opponent_trade_plot", height = "320px")
+        plotOutput("opponent_trade_plot", height = "320px"),
+        card_footer(class = "section-note", "Shows detected roster deltas from saved snapshots. If no bars appear, the current data has not detected a change window for that opponent yet.")
       ),
       card(
         class = "sc-card",
         full_screen = TRUE,
         card_header("NRL Club Exposure"),
-        plotOutput("club_exposure_plot", height = "320px")
+        plotOutput("club_exposure_plot", height = "320px"),
+        card_footer(class = "section-note", "Counts players by NRL club using each side's latest available roster snapshot, not just the partially updated live round.")
       )
     ),
   ),
@@ -680,19 +788,22 @@ ui <- page_navbar(
         class = "sc-card",
         full_screen = TRUE,
         card_header("Your Squad Leverage Watch"),
-        responsive_table("your_signal_table")
+        responsive_table("your_signal_table"),
+        card_footer(class = "section-note", "Proj 3w is the next-three-week player projection. Price Signal is a heuristic move based on recent form and recent price movement, not an official breakeven.")
       ),
       card(
         class = "sc-card",
         full_screen = TRUE,
-        card_header("Next-Round Market Watchlist"),
-        responsive_table("market_watch_table")
+        card_header("Upcoming Fixture Market Watchlist"),
+        responsive_table("market_watch_table"),
+        card_footer(class = "section-note", "Category summarises why a player appears here: fixture play, buy target, premium hold, or monitor. The why column spells out the dominant driver.")
       ),
       card(
         class = "sc-card",
         full_screen = TRUE,
         card_header("Cash Generation Radar"),
-        responsive_table("cash_watch_table")
+        responsive_table("cash_watch_table"),
+        card_footer(class = "section-note", "Next Signal is a heuristic next-match price move, not an official price-change feed. Category splits likely cash cows from flattening or peak-risk plays.")
       ),
       card(
         class = "sc-card",
@@ -715,7 +826,8 @@ ui <- page_navbar(
       class = "sc-card",
       full_screen = TRUE,
       card_header("League Table"),
-      responsive_table("league_snapshot_table")
+      responsive_table("league_snapshot_table"),
+      card_footer(class = "section-note", "Prev Round Pts comes from the last complete league-finance snapshot. Current Round Pts is the live round score feed, which will stay at 0 until games start.")
     ),
     card(
       class = "sc-card",
@@ -907,6 +1019,31 @@ server <- function(input, output, session) {
     latest_team_round_stats(dashboard_data()$team_round_stats_history)
   })
 
+  club_next_fixture <- reactive({
+    data <- dashboard_data()
+    next_team_fixture_lookup(
+      nrl_fixture_source_history = data$nrl_fixture_source_history,
+      fixture_matchup = data$fixture_matchup
+    )
+  })
+
+  live_ladder_round <- reactive({
+    data <- dashboard_data()
+    round_value <- current_round()
+    req(!is.null(data$ladder_history), !is.na(round_value))
+
+    data$ladder_history %>%
+      filter(round == round_value) %>%
+      arrange(desc(run_ts), desc(!is.na(round_points))) %>%
+      group_by(user_team_id) %>%
+      slice_head(n = 1) %>%
+      ungroup() %>%
+      transmute(
+        user_team_id,
+        current_round_points = round_points
+      )
+  })
+
   latest_ladder_round <- reactive({
     data <- dashboard_data()
     round_value <- snapshot_round()
@@ -964,15 +1101,13 @@ server <- function(input, output, session) {
 
   squad_team_mix <- reactive({
     data <- dashboard_data()
-    round_value <- current_round()
     matchup <- current_matchup()
     req(!is.null(data$team_players_latest), !is.null(data$players_cf_latest))
 
-    data$team_players_latest %>%
-      filter(
-        round == round_value,
-        user_team_id %in% c(matchup$my_team_id, matchup$opponent_team_id)
-      ) %>%
+    latest_team_players_snapshot(
+      data$team_players_latest,
+      c(matchup$my_team_id, matchup$opponent_team_id)
+    ) %>%
       distinct(user_team_id, player_id) %>%
       left_join(
         data$players_cf_latest %>% select(player_id, team_abbrev),
@@ -1017,17 +1152,18 @@ server <- function(input, output, session) {
   current_squad_signals <- reactive({
     data <- dashboard_data()
     matchup <- current_matchup()
-    round_value <- snapshot_round()
-    next_round_value <- next_round()
 
     req(
       !is.null(data$squad_round_enriched),
       !is.null(data$availability_risk),
-      !is.null(data$fixture_matchup)
+      !is.null(data$fixture_matchup),
+      !is.null(data$nrl_fixture_source_history)
     )
 
-    data$squad_round_enriched %>%
-      filter(round == round_value, user_team_id %in% c(matchup$my_team_id, matchup$opponent_team_id)) %>%
+    latest_team_squad_snapshot(
+      data$squad_round_enriched,
+      c(matchup$my_team_id, matchup$opponent_team_id)
+    ) %>%
       left_join(
         data$availability_risk %>%
           select(
@@ -1041,12 +1177,11 @@ server <- function(input, output, session) {
         by = "player_id"
       ) %>%
       left_join(
-        data$fixture_matchup %>%
-          filter(round == next_round_value) %>%
+        club_next_fixture() %>%
           select(
             team_abbrev,
-            next_opponent = opponent,
-            next_matchup_rating = matchup_rating_by_player,
+            next_opponent,
+            next_matchup_rating,
             next_3_rounds_difficulty,
             schedule_swing_indicator,
             bye_flag
@@ -1075,7 +1210,6 @@ server <- function(input, output, session) {
 
   market_watchlist <- reactive({
     data <- dashboard_data()
-    next_round_value <- next_round()
     round_value <- current_round()
 
     req(
@@ -1105,12 +1239,11 @@ server <- function(input, output, session) {
         by = "player_id"
       ) %>%
       left_join(
-        data$fixture_matchup %>%
-          filter(round == next_round_value) %>%
+        club_next_fixture() %>%
           select(
             team_abbrev,
-            next_opponent = opponent,
-            next_matchup_rating = matchup_rating_by_player,
+            next_opponent,
+            next_matchup_rating,
             schedule_swing_indicator,
             bye_flag
           ),
@@ -1144,10 +1277,10 @@ server <- function(input, output, session) {
         recent_average = round(recent_average, 1),
         matchup = round(next_matchup_rating, 1),
         category = case_when(
-          projected_price_signal_next_round >= 40000 & next_matchup_rating >= 35 ~ "buy_target",
-          projected_price_signal_next_round < 0 & recent_average >= 75 ~ "premium_hold",
-          next_matchup_rating >= 35 ~ "fixture_play",
-          TRUE ~ "monitor"
+          projected_price_signal_next_round >= 40000 & next_matchup_rating >= 35 ~ "Buy target",
+          projected_price_signal_next_round < 0 & recent_average >= 75 ~ "Premium hold",
+          next_matchup_rating >= 35 ~ "Fixture play",
+          TRUE ~ "Monitor"
         ),
         price_signal = dollar(projected_price_signal_next_round),
         swing = schedule_swing_indicator,
@@ -1165,15 +1298,13 @@ server <- function(input, output, session) {
 
   cash_watch <- reactive({
     data <- dashboard_data()
-    next_round_value <- next_round()
 
     req(!is.null(data$cash_generation), !is.null(data$players_cf_latest), !is.null(data$fixture_matchup))
 
     cash_generation_clean() %>%
       left_join(
-        data$fixture_matchup %>%
-          filter(round == next_round_value) %>%
-          select(team_abbrev, next_opponent = opponent),
+        club_next_fixture() %>%
+          select(team_abbrev, next_opponent),
         by = "team_abbrev"
       ) %>%
       arrange(desc(projected_price_signal_next_round)) %>%
@@ -1183,16 +1314,18 @@ server <- function(input, output, session) {
         next_opponent,
         current_price = dollar(current_price),
         category = case_when(
-          cash_cow_maturity_status == "rising" ~ "cash_upside",
-          cash_cow_maturity_status == "near_peak_or_peaked" ~ "peak_risk",
-          cash_cow_maturity_status == "flattening" ~ "flattening",
-          TRUE ~ "monitor"
+          player_classification == "cash_cow" & cash_cow_maturity_status == "rising" ~ "Cash cow upside",
+          cumulative_cash_generation < 0 & current_price >= 500000 ~ "Short-term bump",
+          cash_cow_maturity_status == "near_peak_or_peaked" ~ "Peak risk",
+          cash_cow_maturity_status == "flattening" ~ "Flattening",
+          TRUE ~ "Monitor"
         ),
         next_signal = dollar(projected_price_signal_next_round),
         total_cash = dollar(cumulative_cash_generation),
         maturity = cash_cow_maturity_status,
         why = case_when(
-          cash_cow_maturity_status == "rising" ~ "still generating cash",
+          player_classification == "cash_cow" & cash_cow_maturity_status == "rising" ~ "still generating cash",
+          cumulative_cash_generation < 0 & current_price >= 500000 ~ "price bump candidate, not a true cash cow yet",
           cash_cow_maturity_status == "near_peak_or_peaked" ~ "near peak price",
           cash_cow_maturity_status == "flattening" ~ "cash growth flattening",
           TRUE ~ "monitor price cycle"
@@ -1269,10 +1402,10 @@ server <- function(input, output, session) {
     if (is.na(live_round) && is.na(stored_round)) {
       "No saved league snapshot is available yet."
     } else if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
-      paste0("Live round is R", live_round, " but your deployed snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app.")
+      paste0("Live matchup round is R", live_round, ", but the last complete league-finance snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app.")
     } else {
       round_label <- if (!is.na(stored_round)) stored_round else live_round
-      paste0("Live round and deployed snapshot are aligned at R", round_label, ".")
+      paste0("Live round and league-finance snapshot are aligned at R", round_label, ".")
     }
   }, fallback = "Snapshot status is unavailable.")
 
@@ -1336,10 +1469,13 @@ server <- function(input, output, session) {
         side,
         `Team Value` = team_value_total_calc,
         `Cash` = cash_end_round_calc,
-        `Proj Score` = avg_projected_score_this_week,
-        `Locked Players` = locked_players
+        `Avg Player Projection` = avg_projected_score_this_week,
+        `DPP Players` = dpp_players
       ) %>%
-      pivot_longer(-side, names_to = "metric", values_to = "value")
+      pivot_longer(-side, names_to = "metric", values_to = "value") %>%
+      group_by(metric) %>%
+      filter(any(!is.na(value)) && !all(coalesce(value, 0) == 0)) %>%
+      ungroup()
 
     ggplot(plot_df, aes(metric, value, fill = side)) +
       geom_col(position = "dodge") +
@@ -1362,8 +1498,8 @@ server <- function(input, output, session) {
         Team = team_name,
         `Squad Value` = dollar(team_value_total_calc),
         Bank = dollar(cash_end_round_calc),
-        `Projected Score` = round(avg_projected_score_this_week, 1),
-        `Round Changes` = total_changes,
+        `Avg Player Projection` = round(avg_projected_score_this_week, 1),
+        `Detected Changes` = total_changes,
         `Boosts Used` = trade_boosts_used,
         `Locked Players` = locked_players,
         `DPP Players` = dpp_players
@@ -1416,7 +1552,25 @@ server <- function(input, output, session) {
         inferred_moves = inferred_players_in,
         actual_moves = actual_trade_count
       ) %>%
-      pivot_longer(-round, names_to = "move_type", values_to = "moves")
+      pivot_longer(-round, names_to = "move_type", values_to = "moves") %>%
+      mutate(moves = coalesce(moves, 0))
+
+    if (!nrow(trade_df) || all(trade_df$moves == 0)) {
+      latest_known_round <- dashboard_data()$opponent_behaviour %>%
+        filter(user_team_id == current_matchup()$opponent_team_id) %>%
+        summarise(latest_round = max(round, na.rm = TRUE)) %>%
+        pull(latest_round)
+
+      return(
+        ggplot(data.frame(round = seq_len(max(1, latest_known_round %||% 1)), moves = 0), aes(round, moves)) +
+          geom_line(color = "#1f5c70", linewidth = 1) +
+          geom_point(color = "#1f5c70", size = 2.5) +
+          annotate("text", x = mean(c(1, max(1, latest_known_round %||% 1))), y = 0.02, label = paste0("No detected trade deltas in saved snapshots through R", latest_known_round %||% "NA"), color = "#56645c") +
+          scale_y_continuous(limits = c(0, 0.03)) +
+          labs(x = "Round", y = "Moves detected") +
+          theme_minimal(base_size = 12)
+      )
+    }
 
     ggplot(trade_df, aes(round, moves, fill = move_type)) +
       geom_col(position = "dodge") +
@@ -1450,14 +1604,16 @@ server <- function(input, output, session) {
         weighted_difficulty = weighted.mean(next_3_rounds_difficulty, w = pmax(player_n, 1), na.rm = TRUE),
         bye_players = sum(if_else(bye_flag %in% TRUE, player_n, 0L), na.rm = TRUE),
         .groups = "drop"
-      )
+      ) %>%
+      filter(is.finite(weighted_difficulty))
 
     ggplot(fixture_df, aes(round, weighted_difficulty, color = side)) +
       geom_line(linewidth = 1.2) +
       geom_point(size = 3) +
       geom_text(aes(label = if_else(bye_players > 0, paste0("bye:", bye_players), "")), nudge_y = 0.5, show.legend = FALSE) +
       scale_color_manual(values = c("You" = "#c4512d", "Opponent" = "#1f5c70")) +
-      scale_x_continuous(breaks = pretty_breaks()) +
+      scale_x_continuous(breaks = sort(unique(fixture_df$round))) +
+      scale_y_continuous(expand = expansion(mult = c(0.08, 0.18))) +
       labs(x = "Round", y = "Weighted fixture difficulty", color = NULL) +
       theme_minimal(base_size = 12) +
       theme(legend.position = "top")
@@ -1479,7 +1635,14 @@ server <- function(input, output, session) {
         `Price Signal` = dollar(projected_price_signal_next_round),
         Matchup = round(next_matchup_rating, 1),
         Swing = schedule_swing_indicator,
-        Urgency = sell_urgency
+        Urgency = sell_urgency,
+        Why = case_when(
+          projected_price_signal_next_round >= 40000 & next_matchup_rating >= 30 ~ "good matchup and strong price momentum",
+          projected_price_signal_next_round < -25000 ~ "price cooling despite role hold",
+          next_matchup_rating >= 35 ~ "strong immediate matchup",
+          sell_urgency %in% c("high", "medium") ~ paste("urgency:", sell_urgency),
+          TRUE ~ "balanced hold/watch profile"
+        )
       ) %>%
       slice_head(n = 14)
   })
@@ -1515,6 +1678,10 @@ server <- function(input, output, session) {
   output$league_snapshot_table <- safe_table({
     latest_ladder_round() %>%
       left_join(
+        live_ladder_round(),
+        by = "user_team_id"
+      ) %>%
+      left_join(
         team_stats_snapshot() %>%
           select(user_team_id, total_changes = stats_total_changes, trade_boosts_used = stats_trade_boosts_used),
         by = "user_team_id"
@@ -1524,7 +1691,8 @@ server <- function(input, output, session) {
         Pos = position,
         Team = team_name,
         Coach = coach_name,
-        `Round Pts` = round_points,
+        `Prev Round Pts` = round_points,
+        `Current Round Pts` = coalesce(current_round_points, 0),
         `Squad Value` = dollar(team_value_total_calc),
         Cash = dollar(cash_end_round_calc),
         `Changes` = coalesce(total_changes, 0L),

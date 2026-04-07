@@ -1,8 +1,9 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 00:42:15 AEST
+- Generated at: 2026-04-08 01:23:07 AEST
 - League ID: 21064
 - Current round: 6
+- League finance snapshot round: 5
 - Next round: 7
 - Your team: Grog Baguettes (Greg)
 - Current matchup: Waterboys (william)
@@ -14,10 +15,10 @@
 | 2026-04-07 23:10:12 AEST | 5 | 6 | nrl_fixture_completion | 5,6 | 1,2,3,4,5,6 | 1,2,3,4,5,6,7 | 545 | 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27 | 1,2,3,4,5,6 |
 
 ## Current matchup snapshot
-| side | team_name | coach_name | position | round_points | total_points | team_value_total_calc | cash_end_round_calc | total_changes | trade_boosts_used | avg_projected_score_this_week | locked_players | dpp_players |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| You | Grog Baguettes | Greg | 11 | 942 | 5747 | $13,406,800 | $58,600 | 9 | 2 | 47.9 | 0 | 5 |
-| Opponent | Waterboys | william | 9 | 1099 | 5989 | $13,762,600 | $67,300 | 0 | 0 | 51.7 | 0 | 18 |
+| side | team_name | coach_name | position | prev_round_points | current_round_points | total_points | team_value_total_calc | cash_end_round_calc | total_changes | trade_boosts_used | avg_projected_score_this_week | locked_players | dpp_players |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| You | Grog Baguettes | Greg | 11 | 942 | 0 | 5747 | $13,406,800 | $58,600 | 9 | 2 | 47.9 | 0 | 5 |
+| Opponent | Waterboys | william | 9 | 1099 | 0 | 5989 | $13,762,600 | $67,300 | 0 | 0 | 51.7 | 0 | 18 |
 
 ## Next SuperCoach league opponents
 | round | opponent_team | opponent_coach | current_fixture_points |
@@ -26,16 +27,16 @@
 | 7 | Get That India | Johnny | NA |
 
 ## League pulse
-| position | team_name | coach_name | round_points | total_points | team_value | bank |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | Slewisbrah RLFC | Lewis | 1199 | 6238 | $13,829,500 | $39,000 |
-| 2 | Crows | sam | 1186 | 6200 | $13,873,500 | $303,600 |
-| 3 | Jerky Turkeys | Joe | 1221 | 6210 | $13,900,300 | $185,900 |
-| 4 | Gordonites  | Daniel | 1168 | 6226 | $13,673,500 | $115,700 |
-| 5 | Magnetic cucumbers | Daniel | 1153 | 6147 | $13,590,900 | $135,200 |
-| 6 | Lord of the Grims | Alex | 1101 | 6110 | $13,839,100 | $72,100 |
-| 7 | Spearmint Rhinos | Zaine | 1163 | 6036 | $13,849,800 | $52,800 |
-| 8 | Hebudeh | sam | 1334 | 6166 | $13,889,500 | $18,300 |
+| position | team_name | coach_name | prev_round_points | current_round_points | total_points | team_value | bank |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Slewisbrah RLFC | Lewis | 1199 | 0 | 6238 | $13,829,500 | $39,000 |
+| 2 | Crows | sam | 1186 | 0 | 6200 | $13,873,500 | $303,600 |
+| 3 | Jerky Turkeys | Joe | 1221 | 0 | 6210 | $13,900,300 | $185,900 |
+| 4 | Gordonites  | Daniel | 1168 | 0 | 6226 | $13,673,500 | $115,700 |
+| 5 | Magnetic cucumbers | Daniel | 1153 | 0 | 6147 | $13,590,900 | $135,200 |
+| 6 | Lord of the Grims | Alex | 1101 | 0 | 6110 | $13,839,100 | $72,100 |
+| 7 | Spearmint Rhinos | Zaine | 1163 | 0 | 6036 | $13,849,800 | $52,800 |
+| 8 | Hebudeh | sam | 1334 | 0 | 6166 | $13,889,500 | $18,300 |
 
 ## Availability and lockout watch
 | side | player | team | risk_band | status | currently_locked | projected_score_this_week |
@@ -43,94 +44,105 @@
 | You | Farnworth, Herbie | DOL | high | Bye Next Round | FALSE | NA |
 
 ## Your squad leverage watch
-| player | team | next_opponent | next_matchup_rating | next_3_rounds_difficulty | schedule_swing_indicator | projected_score_next_3_weeks | projected_value_change_next_3_weeks | keeper_status | sell_urgency |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Brailey, Blayke | SHA | NA | NA | 18.0 | stable | NA | NA | non_keeper | normal |
-| Mamouzelos, Peter | STH | STG | 29.5 | 35.2 | stable | NA | NA | non_keeper | normal |
-| Haas, Payne | BRO | WST | 21.5 | 25.2 | stable | NA | NA | keeper | normal |
-| Paseka, Taniela | MNL | NQC | 23.0 | 30.0 | stable | NA | NA | non_keeper | normal |
-| Mooney, Trey | NEW | SYD | 22.0 | 21.5 | stable | NA | NA | non_keeper | normal |
-| Rudolf, Toby | SHA | NA | NA | 18.0 | stable | NA | NA | non_keeper | normal |
-| Martin, Noah | CBR | MEL | 28.0 | 22.0 | stable | NA | NA | non_keeper | normal |
-| Hau, Arama | GCT | NZL | 25.5 | 25.5 | stable | NA | NA | non_keeper | normal |
-| Chan, Joe | MEL | CBR | 25.0 | 21.0 | stable | NA | NA | non_keeper | normal |
-| Yeo, Isaah | PTH | DOL | 44.0 | 37.5 | stable | NA | NA | non_keeper | normal |
-| Colquhoun, Jesse | SHA | NA | NA | 18.0 | stable | NA | NA | non_keeper | normal |
-| Fifita, David | STH | STG | 29.5 | 35.2 | stable | NA | NA | non_keeper | normal |
-| Sanders, Ethan | CBR | MEL | 28.0 | 22.0 | stable | NA | NA | non_keeper | normal |
-| Moses, Mitchell | PAR | BUL | 24.0 | 21.5 | stable | NA | NA | non_keeper | normal |
+| player | team | next_opponent | next_matchup_rating | next_3_rounds_difficulty | schedule_swing_indicator | projected_score_next_3_weeks | projected_value_change_next_3_weeks | keeper_status | sell_urgency | why |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Haas, Payne | BRO | NQC | 18.3 | 22.9 | harder_short_term | NA | NA | keeper | normal | upside from form and price momentum |
+| Walsh, Reece | BRO | NQC | 18.3 | 22.9 | harder_short_term | NA | NA | keeper | normal | upside from form and price momentum |
+| Martin, Noah | CBR | STH | 17.3 | 20.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Sanders, Ethan | CBR | STH | 17.3 | 20.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Farnworth, Herbie | DOL | PTH | 15.0 | 21.0 | stable | NA | NA | keeper | normal | upside from form and price momentum |
+| Faeamani, Sialetili | GCT | PAR | 23.3 | 24.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Hau, Arama | GCT | PAR | 23.3 | 24.4 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Chan, Joe | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Fa'alogo, Sua | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | keeper | normal | upside from form and price momentum |
+| Howarth, Jack | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Leo, Moses | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Warbrick, William | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Paseka, Taniela | MNL | STG | 31.0 | 30.3 | harder_short_term | NA | NA | non_keeper | normal | upside from form and price momentum |
+| Mooney, Trey | NEW | WST | 20.3 | 21.1 | stable | NA | NA | non_keeper | normal | upside from form and price momentum |
 
 ## Opponent squad profile
-_No rows available._
+| player | team | next_opponent | next_matchup_rating | projected_score_next_3_weeks | risk_band | currently_locked |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fa'alogo, Sua | MEL | NZL | 21.3 | 101.6 | low | FALSE |
+| Cleary, Nathan | PTH | BUL | 34.0 | 95.0 | low | FALSE |
+| Martin, Noah | CBR | STH | 17.3 | 75.8 | low | FALSE |
+| Chan, Joe | MEL | NZL | 21.3 | 75.8 | low | FALSE |
+| Mitchell, Latrell | STH | CBR | 26.3 | 73.4 | low | FALSE |
+| Warbrick, William | MEL | NZL | 21.3 | 71.6 | low | FALSE |
+| Trindall, Braydon | SHA | SYD | 27.3 | 71.4 | low | FALSE |
+| Carrigan, Patrick | BRO | NQC | 18.3 | 70.0 | low | FALSE |
+| Brailey, Blayke | SHA | SYD | 27.3 | 69.0 | low | FALSE |
+| Hau, Arama | GCT | PAR | 23.3 | 68.8 | low | FALSE |
+| Walsh, Reece | BRO | NQC | 18.3 | 67.0 | low | FALSE |
+| Stonestreet, Sam | SHA | SYD | 27.3 | 55.2 | low | FALSE |
+| To'o, Brian | PTH | BUL | 34.0 | 54.4 | low | FALSE |
+| Colquhoun, Jesse | SHA | SYD | 27.3 | 53.2 | low | FALSE |
 
-## Market watchlist for next round
+## Upcoming fixture market watchlist
 | player | team | next_opponent | current_price | recent_average | next_matchup_rating | category | projected_price_rise_next_round | schedule_swing_indicator | cash_cow_maturity_status | why |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Jenkins, Thomas | PTH | DOL | $872,200 | 109.0 | 44.0 | fixture_play | $0 | stable | flattening | elite matchup next round |
-| Cleary, Nathan | PTH | DOL | $859,600 | 95.0 | 44.0 | premium_hold | $-30,754 | stable | near_peak_or_peaked | elite matchup next round |
-| Fa'alogo, Sua | MEL | CBR | $746,700 | 101.6 | 25.0 | monitor | $0 | stable | flattening | blend of form, matchup and price |
-| Edwards, Dylan | PTH | DOL | $732,700 | 78.0 | 44.0 | buy_target | $56,677 | stable | rising | elite matchup next round |
-| Boyd, Tanah | NZL | GCT | $748,800 | 92.6 | 19.0 | monitor | $0 | stable | flattening | premium form hold/watch |
-| McLean, Casey | PTH | DOL | $691,000 | 75.8 | 44.0 | premium_hold | $-29,897 | stable | near_peak_or_peaked | elite matchup next round |
-| Papali'i, Isaiah | PTH | DOL | $657,500 | 72.0 | 44.0 | fixture_play | $0 | stable | flattening | elite matchup next round |
-| Clifford, Jake | NQC | MNL | $684,400 | 82.2 | 27.8 | monitor | $0 | stable | flattening | premium form hold/watch |
-| Purdue, Jaxon | NQC | MNL | $713,700 | 81.2 | 27.8 | monitor | $0 | stable | flattening | premium form hold/watch |
-| Young, Dominic | NEW | SYD | $632,900 | 83.4 | 22.0 | monitor | $0 | stable | flattening | premium form hold/watch |
-| Yeo, Isaah | PTH | DOL | $660,000 | 71.2 | 44.0 | fixture_play | $-48,233 | stable | near_peak_or_peaked | elite matchup next round |
-| Sasagi, Simi | CBR | MEL | $585,600 | 79.6 | 28.0 | monitor | $0 | stable | flattening | blend of form, matchup and price |
-| Ford, Jackson | NZL | GCT | $727,100 | 82.0 | 19.0 | monitor | $0 | stable | flattening | premium form hold/watch |
-| Young, Hudson | CBR | MEL | $740,800 | 76.4 | 28.0 | monitor | $18,975 | stable | flattening | blend of form, matchup and price |
-| Hughes, Jahrome | MEL | CBR | $733,200 | 78.6 | 25.0 | monitor | $0 | stable | flattening | blend of form, matchup and price |
-| Luki, Heilum | NQC | MNL | $550,100 | 73.6 | 27.8 | monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Jenkins, Thomas | PTH | BUL | $872,200 | 109.0 | 34.0 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Fa'alogo, Sua | MEL | NZL | $746,700 | 101.6 | 21.3 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Cleary, Nathan | PTH | BUL | $859,600 | 95.0 | 34.0 | Premium hold | $-30,754 | stable | near_peak_or_peaked | premium form hold/watch |
+| Hynes, Nicholas | SHA | SYD | $808,800 | 99.4 | 27.3 | Premium hold | $-49,025 | easier_short_term | near_peak_or_peaked | premium form hold/watch |
+| Boyd, Tanah | NZL | MEL | $748,800 | 92.6 | 28.3 | Monitor | $0 | harder_short_term | flattening | premium form hold/watch |
+| Edwards, Dylan | PTH | BUL | $732,700 | 78.0 | 34.0 | Monitor | $56,677 | stable | rising | blend of form, matchup and price |
+| Ford, Jackson | NZL | MEL | $727,100 | 82.0 | 28.3 | Monitor | $0 | harder_short_term | flattening | premium form hold/watch |
+| Young, Dominic | NEW | WST | $632,900 | 83.4 | 20.3 | Monitor | $0 | stable | flattening | premium form hold/watch |
+| Clifford, Jake | NQC | BRO | $684,400 | 82.2 | 21.3 | Monitor | $0 | stable | flattening | premium form hold/watch |
+| McLean, Casey | PTH | BUL | $691,000 | 75.8 | 34.0 | Premium hold | $-29,897 | stable | near_peak_or_peaked | blend of form, matchup and price |
+| Hughes, Jahrome | MEL | NZL | $733,200 | 78.6 | 21.3 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Purdue, Jaxon | NQC | BRO | $713,700 | 81.2 | 21.3 | Monitor | $0 | stable | flattening | premium form hold/watch |
+| Papali'i, Isaiah | PTH | BUL | $657,500 | 72.0 | 34.0 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Chan, Joe | MEL | NZL | $577,100 | 75.8 | 21.3 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Sasagi, Simi | CBR | STH | $585,600 | 79.6 | 17.3 | Monitor | $0 | stable | flattening | blend of form, matchup and price |
+| Yeo, Isaah | PTH | BUL | $660,000 | 71.2 | 34.0 | Monitor | $-48,233 | stable | near_peak_or_peaked | blend of form, matchup and price |
 
 ## Cash generator watch
 | player | team | next_opponent | current_price | category | projected_price_rise_next_round | cumulative_cash_generation | cash_cow_maturity_status | player_classification | why |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Halangahu, Jacob | STG | STH | $334,800 | cash_upside | $89,490 | $0 | rising | cash_cow | still generating cash |
-| Best, Bradman | NEW | SYD | $573,900 | cash_upside | $87,203 | $-82,900 | rising | stepping_stone | still generating cash |
-| Garlick, Bronson | STH | STG | $268,400 | cash_upside | $86,820 | $-87,400 | rising | stepping_stone | still generating cash |
-| Mooney, Trey | NEW | SYD | $475,700 | cash_upside | $86,731 | $33,700 | rising | stepping_stone | still generating cash |
-| Hopoi, Lipoi | BUL | PAR | $309,000 | cash_upside | $85,688 | $0 | rising | cash_cow | still generating cash |
-| Ieremia-Toeava, Eddie | NZL | GCT | $339,500 | cash_upside | $84,790 | $0 | rising | cash_cow | still generating cash |
-| Paseka, Taniela | MNL | NQC | $389,400 | cash_upside | $84,226 | $60,800 | rising | cash_cow | still generating cash |
-| Fotuaika, Moeaki | GCT | NZL | $429,500 | cash_upside | $83,595 | $-78,100 | rising | stepping_stone | still generating cash |
-| Alamoti, Paul | PTH | DOL | $567,800 | cash_upside | $83,436 | $-75,200 | rising | stepping_stone | still generating cash |
-| Fonua-Blake, Addin | SHA | NA | $558,100 | cash_upside | $83,269 | $-80,800 | rising | stepping_stone | still generating cash |
-| Horsburgh, Corey | CBR | MEL | $518,800 | cash_upside | $83,100 | $-76,900 | rising | stepping_stone | still generating cash |
-| Iro, Kayal | SHA | NA | $627,500 | cash_upside | $82,939 | $-78,400 | rising | keeper | still generating cash |
-| Mariner, Deine | BRO | WST | $410,600 | cash_upside | $82,760 | $-82,600 | rising | stepping_stone | still generating cash |
-| Fletcher, Thomas | STH | STG | $322,700 | cash_upside | $81,856 | $0 | rising | cash_cow | still generating cash |
+| Halangahu, Jacob | STG | MNL | $334,800 | Cash cow upside | $89,490 | $0 | rising | cash_cow | still generating cash |
+| Best, Bradman | NEW | WST | $573,900 | Monitor | $87,203 | $-82,900 | rising | stepping_stone | monitor price cycle |
+| Garlick, Bronson | STH | CBR | $268,400 | Monitor | $86,820 | $-87,400 | rising | stepping_stone | monitor price cycle |
+| Mooney, Trey | NEW | WST | $475,700 | Monitor | $86,731 | $33,700 | rising | stepping_stone | monitor price cycle |
+| Hopoi, Lipoi | BUL | PTH | $309,000 | Cash cow upside | $85,688 | $0 | rising | cash_cow | still generating cash |
+| Ieremia-Toeava, Eddie | NZL | MEL | $339,500 | Cash cow upside | $84,790 | $0 | rising | cash_cow | still generating cash |
+| Paseka, Taniela | MNL | STG | $389,400 | Cash cow upside | $84,226 | $60,800 | rising | cash_cow | still generating cash |
+| Fotuaika, Moeaki | GCT | PAR | $429,500 | Monitor | $83,595 | $-78,100 | rising | stepping_stone | monitor price cycle |
+| Alamoti, Paul | PTH | BUL | $567,800 | Monitor | $83,436 | $-75,200 | rising | stepping_stone | monitor price cycle |
+| Fonua-Blake, Addin | SHA | SYD | $558,100 | Monitor | $83,269 | $-80,800 | rising | stepping_stone | monitor price cycle |
+| Horsburgh, Corey | CBR | STH | $518,800 | Monitor | $83,100 | $-76,900 | rising | stepping_stone | monitor price cycle |
+| Iro, Kayal | SHA | SYD | $627,500 | Monitor | $82,939 | $-78,400 | rising | keeper | monitor price cycle |
+| Mariner, Deine | BRO | NQC | $410,600 | Monitor | $82,760 | $-82,600 | rising | stepping_stone | monitor price cycle |
+| Fletcher, Thomas | STH | CBR | $322,700 | Cash cow upside | $81,856 | $0 | rising | cash_cow | still generating cash |
 
 ## NRL context watch
 | side | round | club | opponent | player_count | home_away | travel_burden | projected_team_scoring_environment | matchup_rating_by_team | schedule_swing_indicator |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| You | 6 | MEL | NZL | 5 | home | home | 21.3 | 21.3 | stable |
-| You | 6 | STH | CBR | 4 | home | home | 26.3 | 26.3 | harder_short_term |
-| You | 6 | SHA | SYD | 3 | home | home | 27.3 | 27.3 | easier_short_term |
-| You | 6 | BRO | NQC | 2 | home | home | 18.3 | 18.3 | harder_short_term |
-| You | 6 | CBR | STH | 2 | away | high | 17.3 | 17.3 | stable |
-| You | 6 | GCT | PAR | 2 | away | high | 23.3 | 23.3 | stable |
-| You | 6 | PAR | GCT | 2 | home | home | 23.3 | 23.3 | stable |
-| You | 6 | DOL | NA | 1 | bye | bye | NA | NA | harder_short_term |
-| You | 6 | MNL | STG | 1 | away | medium | 31.0 | 31.0 | harder_short_term |
-| You | 6 | NEW | WST | 1 | away | high | 20.3 | 20.3 | stable |
-| You | 6 | PTH | BUL | 1 | away | low | 34.0 | 34.0 | stable |
-| You | 6 | SYD | SHA | 1 | away | high | 22.9 | 22.9 | stable |
-| You | 6 | WST | NEW | 1 | home | home | 22.7 | 22.7 | stable |
-| You | 7 | MEL | CBR | 5 | away | high | 25.0 | 25.0 | stable |
-| You | 7 | STH | STG | 4 | home | home | 29.5 | 29.5 | stable |
-| You | 7 | SHA | NA | 3 | bye | bye | NA | NA | stable |
-| You | 7 | BRO | WST | 2 | away | high | 21.5 | 21.5 | stable |
-| You | 7 | CBR | MEL | 2 | home | home | 28.0 | 28.0 | stable |
+| Opponent | 6 | MEL | NZL | 4 | home | home | 21.3 | 21.3 | stable |
+| Opponent | 6 | SHA | SYD | 4 | home | home | 27.3 | 27.3 | easier_short_term |
+| Opponent | 6 | NEW | WST | 3 | away | high | 20.3 | 20.3 | stable |
+| Opponent | 6 | STH | CBR | 3 | home | home | 26.3 | 26.3 | harder_short_term |
+| Opponent | 6 | SYD | SHA | 3 | away | high | 22.9 | 22.9 | stable |
+| Opponent | 6 | BRO | NQC | 2 | home | home | 18.3 | 18.3 | harder_short_term |
+| Opponent | 6 | PTH | BUL | 2 | away | low | 34.0 | 34.0 | stable |
+| Opponent | 6 | CBR | STH | 1 | away | high | 17.3 | 17.3 | stable |
+| Opponent | 6 | GCT | PAR | 1 | away | high | 23.3 | 23.3 | stable |
+| Opponent | 6 | NQC | BRO | 1 | away | high | 21.3 | 21.3 | stable |
+| Opponent | 6 | STG | MNL | 1 | home | home | 18.4 | 18.4 | easier_short_term |
+| Opponent | 6 | WST | NEW | 1 | home | home | 22.7 | 22.7 | stable |
+| Opponent | 7 | MEL | CBR | 4 | away | high | 25.0 | 25.0 | stable |
+| Opponent | 7 | SHA | NA | 4 | bye | bye | NA | NA | stable |
+| Opponent | 7 | NEW | SYD | 3 | away | high | 22.0 | 22.0 | stable |
+| Opponent | 7 | STH | STG | 3 | home | home | 29.5 | 29.5 | stable |
+| Opponent | 7 | SYD | NEW | 3 | home | home | 23.5 | 23.5 | stable |
+| Opponent | 7 | BRO | WST | 2 | away | high | 21.5 | 21.5 | stable |
 
 ## Opponent trade behaviour
-| round | inferred_trade_events | inferred_players_in | actual_trade_count | trade_boosts_used | behaviour_source |
-| --- | --- | --- | --- | --- | --- |
-| 5 | 0 | 0 | NA | 0 | snapshot_inference_plus_team_stats |
-| 4 | 0 | 0 | NA | 0 | snapshot_inference_plus_team_stats |
-| 3 | 0 | 0 | NA | 0 | snapshot_inference_plus_team_stats |
-| 2 | 0 | 0 | NA | 0 | snapshot_inference_plus_team_stats |
-| 1 | 0 | 0 | NA | NA | snapshot_inference_plus_team_stats |
+| note |
+| --- |
+| No detected trade deltas in saved snapshots for the current opponent yet. |
 
 ## Long-horizon planning snapshot
 | team_name | coach_name | current_round | current_squad_value | projected_score_next_3_weeks | trades_remaining | boosts_remaining | finals_round | next_bye_rounds |
