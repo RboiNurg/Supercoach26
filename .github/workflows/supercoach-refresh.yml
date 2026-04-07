@@ -11,8 +11,8 @@ on:
     - cron: "*/5 * * * *"
 
 concurrency:
-  group: supercoach-refresh-${{ github.ref_name }}
-  cancel-in-progress: false
+  group: supercoach-refresh-${{ github.ref_name }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -28,6 +28,7 @@ env:
 
 jobs:
   gate:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.gate.outputs.should_run }}
@@ -57,7 +58,7 @@ jobs:
 
   refresh:
     needs: gate
-    if: needs.gate.outputs.should_run == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     env:
       ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
