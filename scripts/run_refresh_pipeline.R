@@ -4,6 +4,7 @@ league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
 data_dir <- file.path("data", paste0("supercoach_league_", league_id))
 rmd_path <- "Jerky Turkey's league info pull and tracking.Rmd"
 md_path <- sub("\\.Rmd$", ".md", rmd_path)
+drive_sync_script <- "scripts/google_drive_bundle_sync.R"
 
 required_packages <- c("knitr")
 missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
@@ -24,10 +25,44 @@ if (!file.exists(rmd_path)) {
   stop("Could not find Rmd: ", rmd_path, call. = FALSE)
 }
 
+if (file.exists(drive_sync_script)) {
+  source(drive_sync_script, local = TRUE)
+
+  if (exists("restore_data_bundle_from_drive", mode = "function")) {
+    restored_from_drive <- tryCatch(
+      {
+        restore_data_bundle_from_drive(data_dir, league_id)
+      },
+      error = function(e) {
+        message("Drive restore failed: ", conditionMessage(e))
+        FALSE
+      }
+    )
+    invisible(restored_from_drive)
+  }
+}
+
 knitr::knit(rmd_path, quiet = TRUE)
 
 if (file.exists(md_path)) {
   unlink(md_path)
+}
+
+if (file.exists(drive_sync_script)) {
+  source(drive_sync_script, local = TRUE)
+
+  if (exists("upload_data_bundle_to_drive", mode = "function")) {
+    uploaded_to_drive <- tryCatch(
+      {
+        upload_data_bundle_to_drive(data_dir, league_id)
+      },
+      error = function(e) {
+        message("Drive upload failed: ", conditionMessage(e))
+        FALSE
+      }
+    )
+    invisible(uploaded_to_drive)
+  }
 }
 
 summary_targets <- c(
