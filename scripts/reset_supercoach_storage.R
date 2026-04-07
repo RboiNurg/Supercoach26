@@ -41,17 +41,26 @@ delete_drive_bundle_if_configured <- function(league_id) {
     return(invisible(FALSE))
   }
 
-  ensure_drive_auth()
-  bundle <- locate_drive_bundle(league_id)
+  tryCatch(
+    {
+      ensure_drive_auth()
+      bundle <- locate_drive_bundle(league_id)
 
-  if (is.null(bundle) || nrow(bundle) == 0) {
-    message("Drive bundle delete skipped: no remote bundle found.")
-    return(invisible(FALSE))
-  }
+      if (is.null(bundle) || nrow(bundle) == 0) {
+        message("Drive bundle delete skipped: no remote bundle found.")
+        return(invisible(FALSE))
+      }
 
-  googledrive::drive_rm(bundle)
-  message("Deleted remote Drive bundle for league ", league_id, ".")
-  invisible(TRUE)
+      googledrive::drive_rm(bundle)
+      message("Deleted remote Drive bundle for league ", league_id, ".")
+      invisible(TRUE)
+    },
+    error = function(e) {
+      message("Drive bundle delete skipped after error: ", conditionMessage(e))
+      message("Manual cleanup may still be required in Google Drive.")
+      invisible(FALSE)
+    }
+  )
 }
 
 message("Resetting generated SuperCoach storage for league ", league_id, "...")
