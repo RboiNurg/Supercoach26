@@ -144,6 +144,33 @@ latest_team_finance <- function(ladder_history) {
     )
 }
 
+live_team_finance <- function(team_players_latest, master_player, ladder_history) {
+  latest_players <- latest_team_players_snapshot(team_players_latest)
+  finance_base <- latest_team_finance(ladder_history)
+
+  if (is.null(latest_players) || !nrow(latest_players) || is.null(master_player) || !nrow(master_player)) {
+    return(finance_base)
+  }
+
+  latest_players %>%
+    left_join(
+      master_player %>%
+        select(player_id, current_price),
+      by = "player_id"
+    ) %>%
+    group_by(user_team_id, latest_round = round) %>%
+    summarise(
+      live_squad_value_calc = sum(current_price, na.rm = TRUE),
+      live_missing_prices = sum(is.na(current_price)),
+      .groups = "drop"
+    ) %>%
+    left_join(finance_base, by = "user_team_id") %>%
+    mutate(
+      live_cash_end_round_calc = finance_cash_end_round_calc,
+      live_team_value_total_calc = live_squad_value_calc + coalesce(live_cash_end_round_calc, 0)
+    )
+}
+
 latest_team_structure <- function(structure_health) {
   if (is.null(structure_health) || !nrow(structure_health)) {
     return(NULL)
@@ -354,7 +381,7 @@ build_gpt_prompt_pack <- function(
     finance_round <- current_round
   }
 
-  finance_snapshot <- latest_team_finance(ladder_history)
+  finance_snapshot <- live_team_finance(team_players_latest, master_player, ladder_history)
   structure_snapshot <- latest_team_structure(structure_health)
   team_stats_snapshot <- latest_team_round_stats(team_round_stats_history)
   live_fixture_lookup <- next_team_fixture_lookup(
@@ -370,9 +397,9 @@ build_gpt_prompt_pack <- function(
     ungroup() %>%
     left_join(finance_snapshot, by = "user_team_id") %>%
     mutate(
-      squad_value_calc = coalesce(squad_value_calc, finance_squad_value_calc),
-      cash_end_round_calc = coalesce(cash_end_round_calc, finance_cash_end_round_calc),
-      team_value_total_calc = coalesce(team_value_total_calc, finance_team_value_total_calc)
+      squad_value_calc = coalesce(live_squad_value_calc, squad_value_calc, finance_squad_value_calc),
+      cash_end_round_calc = coalesce(live_cash_end_round_calc, cash_end_round_calc, finance_cash_end_round_calc),
+      team_value_total_calc = coalesce(live_team_value_total_calc, team_value_total_calc, finance_team_value_total_calc)
     )
 
   my_team_id <- latest_ladder_round %>%
@@ -778,13 +805,18 @@ build_gpt_prompt_pack <- function(
     pull(label) %>%
     first() %||% "Unknown opponent"
 
+  latest_matchup_rounds <- latest_round_by_team(team_players_latest, c(my_team_id, opponent_team_id))
+  your_latest_pull <- latest_matchup_rounds %>% filter(user_team_id == my_team_id) %>% pull(latest_round) %>% first()
+  opp_latest_pull <- latest_matchup_rounds %>% filter(user_team_id == opponent_team_id) %>% pull(latest_round) %>% first()
+
   pack_lines <- c(
     "# SuperCoach Weekly Analysis Pack",
     "",
     paste0("- Generated at: ", format(generated_at, tz = "Australia/Sydney", usetz = TRUE)),
     paste0("- League ID: ", league_id),
     paste0("- Current round: ", current_round),
-    paste0("- League finance snapshot round: ", finance_round),
+    paste0("- Latest squad pulls: you R", your_latest_pull %||% "NA", ", opponent R", opp_latest_pull %||% "NA"),
+    "- Team value and bank use latest squad state plus current player prices, with bank carried from the latest known cash calculation.",
     paste0("- Next round: ", next_round),
     paste0("- Your team: ", my_team_label),
     paste0("- Current matchup: ", opponent_label),

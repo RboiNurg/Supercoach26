@@ -177,6 +177,33 @@ latest_team_finance <- function(ladder_history) {
     )
 }
 
+live_team_finance <- function(team_players_latest, master_player, ladder_history) {
+  latest_players <- latest_team_players_snapshot(team_players_latest)
+  finance_base <- latest_team_finance(ladder_history)
+
+  if (is.null(latest_players) || !nrow(latest_players) || is.null(master_player) || !nrow(master_player)) {
+    return(finance_base)
+  }
+
+  latest_players %>%
+    left_join(
+      master_player %>%
+        select(player_id, current_price),
+      by = "player_id"
+    ) %>%
+    group_by(user_team_id, latest_round = round) %>%
+    summarise(
+      live_squad_value_calc = sum(current_price, na.rm = TRUE),
+      live_missing_prices = sum(is.na(current_price)),
+      .groups = "drop"
+    ) %>%
+    left_join(finance_base, by = "user_team_id") %>%
+    mutate(
+      live_cash_end_round_calc = finance_cash_end_round_calc,
+      live_team_value_total_calc = live_squad_value_calc + coalesce(live_cash_end_round_calc, 0)
+    )
+}
+
 latest_team_structure <- function(structure_health) {
   if (is.null(structure_health) || !nrow(structure_health)) {
     return(NULL)
@@ -703,7 +730,7 @@ ui <- page_navbar(
     div(
       class = "metric-grid",
       metric_card("Current Round", "current_round_text"),
-      metric_card("League Finance Snapshot", "snapshot_round_text"),
+      metric_card("Latest Squad Pull", "snapshot_round_text"),
       metric_card("Last Data Refresh", "last_refresh_text"),
       metric_card("Current Matchup", "matchup_text"),
       metric_card("Latest GPT Pack", "latest_export_text")
@@ -1008,7 +1035,12 @@ server <- function(input, output, session) {
   })
 
   finance_snapshot <- reactive({
-    latest_team_finance(dashboard_data()$ladder_history)
+    data <- dashboard_data()
+    live_team_finance(
+      team_players_latest = data$team_players_latest,
+      master_player = data$master_player,
+      ladder_history = data$ladder_history
+    )
   })
 
   structure_snapshot <- reactive({
@@ -1057,9 +1089,9 @@ server <- function(input, output, session) {
       ungroup() %>%
       left_join(finance_snapshot(), by = "user_team_id") %>%
       mutate(
-        squad_value_calc = coalesce(squad_value_calc, finance_squad_value_calc),
-        cash_end_round_calc = coalesce(cash_end_round_calc, finance_cash_end_round_calc),
-        team_value_total_calc = coalesce(team_value_total_calc, finance_team_value_total_calc)
+        squad_value_calc = coalesce(live_squad_value_calc, squad_value_calc, finance_squad_value_calc),
+        cash_end_round_calc = coalesce(live_cash_end_round_calc, cash_end_round_calc, finance_cash_end_round_calc),
+        team_value_total_calc = coalesce(live_team_value_total_calc, team_value_total_calc, finance_team_value_total_calc)
       )
   })
 
@@ -1387,25 +1419,41 @@ server <- function(input, output, session) {
   })
 
   output$snapshot_round_text <- safe_text({
-    round_value <- snapshot_round()
-    if (is.na(round_value)) {
+    matchup <- current_matchup()
+    rounds <- latest_round_by_team(
+      dashboard_data()$team_players_latest,
+      c(matchup$my_team_id, matchup$opponent_team_id)
+    )
+
+    if (is.null(rounds) || !nrow(rounds)) {
       "Unavailable"
+    } else if (nrow(rounds) == 1) {
+      paste0("R", rounds$latest_round[[1]])
     } else {
-      paste0("R", round_value)
+      you_round <- rounds %>% filter(user_team_id == matchup$my_team_id) %>% pull(latest_round) %>% first()
+      opp_round <- rounds %>% filter(user_team_id == matchup$opponent_team_id) %>% pull(latest_round) %>% first()
+      paste0("You R", you_round %||% "NA", " / Opp R", opp_round %||% "NA")
     }
   })
 
   output$snapshot_status_text <- safe_text({
     live_round <- current_round()
-    stored_round <- snapshot_round()
+    matchup <- current_matchup()
+    rounds <- latest_round_by_team(
+      dashboard_data()$team_players_latest,
+      c(matchup$my_team_id, matchup$opponent_team_id)
+    )
 
-    if (is.na(live_round) && is.na(stored_round)) {
-      "No saved league snapshot is available yet."
-    } else if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
-      paste0("Live matchup round is R", live_round, ", but the last complete league-finance snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app.")
+    if (is.na(live_round) || is.null(rounds) || !nrow(rounds)) {
+      "No saved squad pull is available yet."
     } else {
-      round_label <- if (!is.na(stored_round)) stored_round else live_round
-      paste0("Live round and league-finance snapshot are aligned at R", round_label, ".")
+      you_round <- rounds %>% filter(user_team_id == matchup$my_team_id) %>% pull(latest_round) %>% first()
+      opp_round <- rounds %>% filter(user_team_id == matchup$opponent_team_id) %>% pull(latest_round) %>% first()
+      paste0(
+        "Live matchup round is R", live_round,
+        ". Team value and bank use latest detected squads plus current player prices: you through R", you_round %||% "NA",
+        ", opponent through R", opp_round %||% "NA", "."
+      )
     }
   }, fallback = "Snapshot status is unavailable.")
 

@@ -1,9 +1,10 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 01:23:07 AEST
+- Generated at: 2026-04-08 01:31:17 AEST
 - League ID: 21064
 - Current round: 6
-- League finance snapshot round: 5
+- Latest squad pulls: you R6, opponent R5
+- Team value and bank use latest squad state plus current player prices, with bank carried from the latest known cash calculation.
 - Next round: 7
 - Your team: Grog Baguettes (Greg)
 - Current matchup: Waterboys (william)
