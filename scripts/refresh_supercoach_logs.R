@@ -954,17 +954,9 @@ refresh_supercoach_logs <- function() {
       .groups = "drop"
     )
 
-  recent_history_refresh <- player_history_refresh_log_existing %>%
-    group_by(player_name) %>%
-    summarise(
-      last_history_refresh_ts = max(run_ts, na.rm = TRUE),
-      .groups = "drop"
-    )
-
   player_refresh_candidates <- initialvalue_catalog %>%
     mutate(is_league_focus = player_name %in% league_focus_player_names) %>%
     left_join(existing_history_summary, by = "player_name") %>%
-    left_join(recent_history_refresh, by = "player_name") %>%
     mutate(
       stored_rounds = map(stored_rounds, ~ if (is.null(.x)) integer() else as.integer(.x)),
       missing_history = is.na(latest_price_stored),
@@ -977,24 +969,18 @@ refresh_supercoach_logs <- function() {
         stored_rounds,
         ~ any(!mutable_rounds %in% .x)
       ),
-      hours_since_history_refresh = as.numeric(difftime(run_ts, last_history_refresh_ts, units = "hours")),
-      league_focus_due = is_league_focus & (
-        is.na(last_history_refresh_ts) |
-          is.na(hours_since_history_refresh) |
-          hours_since_history_refresh >= 12
-      ),
       refresh_reason = case_when(
         missing_history ~ "missing_history",
         current_price_changed ~ "current_price_changed",
         missing_mutable_rounds ~ "mutable_round_missing",
-        league_focus_due ~ "league_focus_refresh",
+        is_league_focus ~ "league_focus_refresh",
         TRUE ~ NA_character_
       )
     )
 
   players_to_refresh_tbl <- player_refresh_candidates %>%
     filter(!is.na(refresh_reason)) %>%
-    select(player_name, refresh_reason, current_price_external, latest_price_stored, is_league_focus, last_history_refresh_ts, hours_since_history_refresh)
+    select(player_name, refresh_reason, current_price_external, latest_price_stored, is_league_focus)
 
   player_price_history_new <- if (nrow(players_to_refresh_tbl) == 0) {
     empty_player_price_history_2026
