@@ -104,6 +104,83 @@ summarise_trade_behaviour <- function(opponent_behaviour, opponent_team_id) {
     utils::head(6)
 }
 
+latest_complete_ladder_round_value <- function(ladder_history, min_complete_teams = 8L) {
+  if (is.null(ladder_history) || !nrow(ladder_history) || !"round" %in% names(ladder_history)) {
+    return(NA_integer_)
+  }
+
+  ladder_history %>%
+    group_by(round, user_team_id) %>%
+    summarise(
+      has_finance = any(!is.na(team_value_total_calc) & !is.na(cash_end_round_calc)),
+      .groups = "drop"
+    ) %>%
+    group_by(round) %>%
+    summarise(teams_with_finance = sum(has_finance, na.rm = TRUE), .groups = "drop") %>%
+    filter(teams_with_finance >= min_complete_teams) %>%
+    arrange(desc(round)) %>%
+    slice_head(n = 1) %>%
+    pull(round) %>%
+    suppressWarnings(as.integer())
+}
+
+latest_team_finance <- function(ladder_history) {
+  if (is.null(ladder_history) || !nrow(ladder_history)) {
+    return(NULL)
+  }
+
+  ladder_history %>%
+    filter(!is.na(team_value_total_calc) | !is.na(cash_end_round_calc) | !is.na(squad_value_calc)) %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      finance_round = round,
+      finance_squad_value_calc = squad_value_calc,
+      finance_cash_end_round_calc = cash_end_round_calc,
+      finance_team_value_total_calc = team_value_total_calc
+    )
+}
+
+latest_team_structure <- function(structure_health) {
+  if (is.null(structure_health) || !nrow(structure_health)) {
+    return(NULL)
+  }
+
+  structure_health %>%
+    arrange(user_team_id, desc(!is.na(avg_projected_score_this_week)), desc(round)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      structure_round = round,
+      avg_projected_score_this_week = avg_projected_score_this_week,
+      locked_players = locked_players,
+      dpp_players = dpp_players
+    )
+}
+
+latest_team_round_stats <- function(team_round_stats_history) {
+  if (is.null(team_round_stats_history) || !nrow(team_round_stats_history)) {
+    return(NULL)
+  }
+
+  team_round_stats_history %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      stats_round = round,
+      total_changes = total_changes,
+      trade_boosts_used = trade_boosts_used
+    )
+}
+
 build_gpt_prompt_pack <- function(
     data_dir,
     league_id,
@@ -166,11 +243,27 @@ build_gpt_prompt_pack <- function(
   next_round <- game_rules$next_round[[1]] %||% (current_round + 1L)
   generated_at <- Sys.time()
 
+  finance_round <- latest_complete_ladder_round_value(ladder_history)
+  if (is.na(finance_round)) {
+    finance_round <- current_round
+  }
+
+  finance_snapshot <- latest_team_finance(ladder_history)
+  structure_snapshot <- latest_team_structure(structure_health)
+  team_stats_snapshot <- latest_team_round_stats(team_round_stats_history)
+
   latest_ladder_round <- ladder_history %>%
-    filter(round == current_round) %>%
+    filter(round == finance_round) %>%
+    arrange(desc(run_ts), desc(!is.na(team_value_total_calc)), desc(!is.na(cash_end_round_calc))) %>%
     group_by(user_team_id) %>%
-    slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-    ungroup()
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    left_join(finance_snapshot, by = "user_team_id") %>%
+    mutate(
+      squad_value_calc = coalesce(squad_value_calc, finance_squad_value_calc),
+      cash_end_round_calc = coalesce(cash_end_round_calc, finance_cash_end_round_calc),
+      team_value_total_calc = coalesce(team_value_total_calc, finance_team_value_total_calc)
+    )
 
   my_team_id <- latest_ladder_round %>%
     filter(is_me %in% TRUE) %>%
@@ -207,17 +300,12 @@ build_gpt_prompt_pack <- function(
       cash_end_round_calc
     ) %>%
     left_join(
-      structure_health %>%
-        filter(round == current_round) %>%
+      structure_snapshot %>%
         select(user_team_id, avg_projected_score_this_week, locked_players, dpp_players),
       by = "user_team_id"
     ) %>%
     left_join(
-      team_round_stats_history %>%
-        filter(round == current_round) %>%
-        group_by(user_team_id) %>%
-        slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-        ungroup() %>%
+      team_stats_snapshot %>%
         select(user_team_id, total_changes, trade_boosts_used),
       by = "user_team_id"
     ) %>%
@@ -225,7 +313,8 @@ build_gpt_prompt_pack <- function(
       side = if_else(is_me %in% TRUE, "You", "Opponent"),
       team_value_total_calc = fmt_money(team_value_total_calc),
       cash_end_round_calc = fmt_money(cash_end_round_calc),
-      avg_projected_score_this_week = fmt_number(avg_projected_score_this_week, 1)
+      avg_projected_score_this_week = fmt_number(avg_projected_score_this_week, 1),
+      total_changes = coalesce(total_changes, 0L)
     ) %>%
     select(
       side,
@@ -406,9 +495,22 @@ build_gpt_prompt_pack <- function(
       current_price = fmt_money(current_price),
       recent_average = fmt_number(recent_average, 1),
       next_matchup_rating = fmt_number(next_matchup_rating, 1),
+      category = case_when(
+        projected_price_rise_next_round >= 40000 & next_matchup_rating >= 35 ~ "buy_target",
+        projected_price_rise_next_round < 0 & recent_average >= 75 ~ "premium_hold",
+        next_matchup_rating >= 35 ~ "fixture_play",
+        TRUE ~ "monitor"
+      ),
       projected_price_rise_next_round = fmt_money(projected_price_rise_next_round),
       schedule_swing_indicator,
-      cash_cow_maturity_status
+      cash_cow_maturity_status,
+      why = case_when(
+        projected_price_rise_next_round >= 40000 & next_matchup_rating >= 35 ~ "hot form + strong matchup + price rise",
+        projected_price_rise_next_round >= 40000 ~ "hot form + price rise",
+        next_matchup_rating >= 35 ~ "elite matchup next round",
+        recent_average >= 80 ~ "premium form hold/watch",
+        TRUE ~ "blend of form, matchup and price"
+      )
     ) %>%
     utils::head(16)
 
@@ -425,10 +527,22 @@ build_gpt_prompt_pack <- function(
       team = team_abbrev,
       next_opponent,
       current_price = fmt_money(current_price),
+      category = case_when(
+        cash_cow_maturity_status == "rising" ~ "cash_upside",
+        cash_cow_maturity_status == "near_peak_or_peaked" ~ "peak_risk",
+        cash_cow_maturity_status == "flattening" ~ "flattening",
+        TRUE ~ "monitor"
+      ),
       projected_price_rise_next_round = fmt_money(projected_price_rise_next_round),
       cumulative_cash_generation = fmt_money(cumulative_cash_generation),
       cash_cow_maturity_status,
-      player_classification
+      player_classification,
+      why = case_when(
+        cash_cow_maturity_status == "rising" ~ "still generating cash",
+        cash_cow_maturity_status == "near_peak_or_peaked" ~ "near peak price",
+        cash_cow_maturity_status == "flattening" ~ "cash growth flattening",
+        TRUE ~ "monitor price cycle"
+      )
     ) %>%
     utils::head(14)
 

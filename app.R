@@ -137,6 +137,83 @@ load_dashboard_data <- function() {
   )
 }
 
+latest_complete_ladder_round_value <- function(ladder_history, min_complete_teams = 8L) {
+  if (is.null(ladder_history) || !nrow(ladder_history) || !"round" %in% names(ladder_history)) {
+    return(NA_integer_)
+  }
+
+  ladder_history %>%
+    group_by(round, user_team_id) %>%
+    summarise(
+      has_finance = any(!is.na(team_value_total_calc) & !is.na(cash_end_round_calc)),
+      .groups = "drop"
+    ) %>%
+    group_by(round) %>%
+    summarise(teams_with_finance = sum(has_finance, na.rm = TRUE), .groups = "drop") %>%
+    filter(teams_with_finance >= min_complete_teams) %>%
+    arrange(desc(round)) %>%
+    slice_head(n = 1) %>%
+    pull(round) %>%
+    suppressWarnings(as.integer())
+}
+
+latest_team_finance <- function(ladder_history) {
+  if (is.null(ladder_history) || !nrow(ladder_history)) {
+    return(NULL)
+  }
+
+  ladder_history %>%
+    filter(!is.na(team_value_total_calc) | !is.na(cash_end_round_calc) | !is.na(squad_value_calc)) %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      finance_round = round,
+      finance_squad_value_calc = squad_value_calc,
+      finance_cash_end_round_calc = cash_end_round_calc,
+      finance_team_value_total_calc = team_value_total_calc
+    )
+}
+
+latest_team_structure <- function(structure_health) {
+  if (is.null(structure_health) || !nrow(structure_health)) {
+    return(NULL)
+  }
+
+  structure_health %>%
+    arrange(user_team_id, desc(!is.na(avg_projected_score_this_week)), desc(round)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      structure_round = round,
+      structure_projected_score = avg_projected_score_this_week,
+      structure_locked_players = locked_players,
+      structure_dpp_players = dpp_players
+    )
+}
+
+latest_team_round_stats <- function(team_round_stats_history) {
+  if (is.null(team_round_stats_history) || !nrow(team_round_stats_history)) {
+    return(NULL)
+  }
+
+  team_round_stats_history %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      stats_round = round,
+      stats_total_changes = total_changes,
+      stats_trade_boosts_used = trade_boosts_used
+    )
+}
+
 infer_effective_round_from_nrl <- function(
   game_rules,
   nrl_fixture_source_history,
@@ -800,6 +877,11 @@ server <- function(input, output, session) {
 
   snapshot_round <- reactive({
     data <- dashboard_data()
+    finance_round <- latest_complete_ladder_round_value(data$ladder_history)
+    if (!is.na(finance_round)) {
+      return(finance_round)
+    }
+
     available_rounds <- c(
       if (!is.null(data$fixtures_history) && "round" %in% names(data$fixtures_history)) data$fixtures_history$round else integer(),
       if (!is.null(data$ladder_history) && "round" %in% names(data$ladder_history)) data$ladder_history$round else integer(),
@@ -813,6 +895,18 @@ server <- function(input, output, session) {
     max(available_rounds)
   })
 
+  finance_snapshot <- reactive({
+    latest_team_finance(dashboard_data()$ladder_history)
+  })
+
+  structure_snapshot <- reactive({
+    latest_team_structure(dashboard_data()$structure_health)
+  })
+
+  team_stats_snapshot <- reactive({
+    latest_team_round_stats(dashboard_data()$team_round_stats_history)
+  })
+
   latest_ladder_round <- reactive({
     data <- dashboard_data()
     round_value <- snapshot_round()
@@ -820,9 +914,16 @@ server <- function(input, output, session) {
 
     data$ladder_history %>%
       filter(round == round_value) %>%
+      arrange(desc(run_ts), desc(!is.na(team_value_total_calc)), desc(!is.na(cash_end_round_calc))) %>%
       group_by(user_team_id) %>%
-      slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-      ungroup()
+      slice_head(n = 1) %>%
+      ungroup() %>%
+      left_join(finance_snapshot(), by = "user_team_id") %>%
+      mutate(
+        squad_value_calc = coalesce(squad_value_calc, finance_squad_value_calc),
+        cash_end_round_calc = coalesce(cash_end_round_calc, finance_cash_end_round_calc),
+        team_value_total_calc = coalesce(team_value_total_calc, finance_team_value_total_calc)
+      )
   })
 
   latest_fixtures <- reactive({
@@ -830,13 +931,14 @@ server <- function(input, output, session) {
     req(!is.null(data$fixtures_history))
 
     data$fixtures_history %>%
+      arrange(desc(run_ts)) %>%
       group_by(fixture_id) %>%
-      slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+      slice_head(n = 1) %>%
       ungroup()
   })
 
   current_matchup <- reactive({
-    round_value <- snapshot_round()
+    round_value <- current_round()
     req(!is.na(round_value))
 
     my_team_id <- latest_ladder_round() %>%
@@ -883,9 +985,6 @@ server <- function(input, output, session) {
 
   matchup_summary <- reactive({
     ladder <- latest_ladder_round()
-    structure <- dashboard_data()$structure_health
-    team_round_stats <- dashboard_data()$team_round_stats_history
-    round_value <- snapshot_round()
     matchup <- current_matchup()
 
     summary_tbl <- ladder %>%
@@ -900,18 +999,13 @@ server <- function(input, output, session) {
         team_value_total_calc
       ) %>%
       left_join(
-        structure %>%
-          filter(round == round_value) %>%
-          select(user_team_id, avg_projected_score_this_week, locked_players, dpp_players),
+        structure_snapshot() %>%
+          select(user_team_id, avg_projected_score_this_week = structure_projected_score, locked_players = structure_locked_players, dpp_players = structure_dpp_players),
         by = "user_team_id"
       ) %>%
       left_join(
-        team_round_stats %>%
-          filter(round == round_value) %>%
-          group_by(user_team_id) %>%
-          slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-          ungroup() %>%
-          select(user_team_id, total_changes, trade_boosts_used),
+        team_stats_snapshot() %>%
+          select(user_team_id, total_changes = stats_total_changes, trade_boosts_used = stats_trade_boosts_used),
         by = "user_team_id"
       ) %>%
       mutate(side = if_else(is_me %in% TRUE, "You", "Opponent"))
@@ -1049,9 +1143,22 @@ server <- function(input, output, session) {
         next_opponent,
         recent_average = round(recent_average, 1),
         matchup = round(next_matchup_rating, 1),
+        category = case_when(
+          projected_price_signal_next_round >= 40000 & next_matchup_rating >= 35 ~ "buy_target",
+          projected_price_signal_next_round < 0 & recent_average >= 75 ~ "premium_hold",
+          next_matchup_rating >= 35 ~ "fixture_play",
+          TRUE ~ "monitor"
+        ),
         price_signal = dollar(projected_price_signal_next_round),
         swing = schedule_swing_indicator,
-        maturity = cash_cow_maturity_status
+        maturity = cash_cow_maturity_status,
+        why = case_when(
+          projected_price_signal_next_round >= 40000 & next_matchup_rating >= 35 ~ "hot form + strong matchup + price rise",
+          projected_price_signal_next_round >= 40000 ~ "hot form + price rise",
+          next_matchup_rating >= 35 ~ "elite matchup next round",
+          recent_average >= 80 ~ "premium form hold/watch",
+          TRUE ~ "blend of form, matchup and price"
+        )
       ) %>%
       slice_head(n = 14)
   })
@@ -1075,9 +1182,21 @@ server <- function(input, output, session) {
         team = team_abbrev,
         next_opponent,
         current_price = dollar(current_price),
+        category = case_when(
+          cash_cow_maturity_status == "rising" ~ "cash_upside",
+          cash_cow_maturity_status == "near_peak_or_peaked" ~ "peak_risk",
+          cash_cow_maturity_status == "flattening" ~ "flattening",
+          TRUE ~ "monitor"
+        ),
         next_signal = dollar(projected_price_signal_next_round),
         total_cash = dollar(cumulative_cash_generation),
-        maturity = cash_cow_maturity_status
+        maturity = cash_cow_maturity_status,
+        why = case_when(
+          cash_cow_maturity_status == "rising" ~ "still generating cash",
+          cash_cow_maturity_status == "near_peak_or_peaked" ~ "near peak price",
+          cash_cow_maturity_status == "flattening" ~ "cash growth flattening",
+          TRUE ~ "monitor price cycle"
+        )
       ) %>%
       slice_head(n = 12)
   })
@@ -1121,25 +1240,26 @@ server <- function(input, output, session) {
     round_value <- current_round()
 
     if (is.na(round_value)) {
-      return("NA")
+      "NA"
+    } else {
+      settings_round <- round_state()$settings_current_round
+      inference_source <- round_state()$round_inference_source
+
+      if (!is.na(settings_round) && settings_round != round_value) {
+        paste0("R", round_value, " (settings R", settings_round, ", ", inference_source %||% "inferred", ")")
+      } else {
+        paste0("R", round_value)
+      }
     }
-
-    settings_round <- round_state()$settings_current_round
-    inference_source <- round_state()$round_inference_source
-
-    if (!is.na(settings_round) && settings_round != round_value) {
-      return(paste0("R", round_value, " (settings R", settings_round, ", ", inference_source %||% "inferred", ")"))
-    }
-
-    paste0("R", round_value)
   })
 
   output$snapshot_round_text <- safe_text({
     round_value <- snapshot_round()
     if (is.na(round_value)) {
-      return("Unavailable")
+      "Unavailable"
+    } else {
+      paste0("R", round_value)
     }
-    paste0("R", round_value)
   })
 
   output$snapshot_status_text <- safe_text({
@@ -1147,23 +1267,22 @@ server <- function(input, output, session) {
     stored_round <- snapshot_round()
 
     if (is.na(live_round) && is.na(stored_round)) {
-      return("No saved league snapshot is available yet.")
+      "No saved league snapshot is available yet."
+    } else if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
+      paste0("Live round is R", live_round, " but your deployed snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app.")
+    } else {
+      round_label <- if (!is.na(stored_round)) stored_round else live_round
+      paste0("Live round and deployed snapshot are aligned at R", round_label, ".")
     }
-
-    if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
-      return(paste0("Live round is R", live_round, " but your deployed snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app."))
-    }
-
-    round_label <- if (!is.na(stored_round)) stored_round else live_round
-    paste0("Live round and deployed snapshot are aligned at R", round_label, ".")
   }, fallback = "Snapshot status is unavailable.")
 
   output$last_refresh_text <- safe_text({
     data <- dashboard_data()
     if (is.null(data$source_refresh_log) || nrow(data$source_refresh_log) == 0) {
-      return("No refresh yet")
+      "No refresh yet"
+    } else {
+      format(max(data$source_refresh_log$run_ts), tz = "Australia/Sydney", usetz = TRUE)
     }
-    format(max(data$source_refresh_log$run_ts), tz = "Australia/Sydney", usetz = TRUE)
   })
 
   output$matchup_text <- safe_text({
@@ -1177,19 +1296,17 @@ server <- function(input, output, session) {
   output$latest_export_text <- safe_text({
     path <- file.path(data_dir, "analysis_export", "latest_gpt_prompt_pack.md")
     if (!file.exists(path)) {
-      return("Not built yet")
+      "Not built yet"
+    } else {
+      format(file.info(path)$mtime, tz = "Australia/Sydney", usetz = TRUE)
     }
-    format(file.info(path)$mtime, tz = "Australia/Sydney", usetz = TRUE)
   })
 
   output$league_finance_plot <- safe_plot({
-    structure <- dashboard_data()$structure_health
-
     plot_df <- latest_ladder_round() %>%
       left_join(
-        structure %>%
-          filter(round == current_round()) %>%
-          select(user_team_id, avg_projected_score_this_week),
+        structure_snapshot() %>%
+          select(user_team_id, avg_projected_score_this_week = structure_projected_score),
         by = "user_team_id"
       ) %>%
       mutate(
@@ -1197,10 +1314,11 @@ server <- function(input, output, session) {
           is_me %in% TRUE ~ "You",
           user_team_id == current_matchup()$opponent_team_id ~ "Opponent",
           TRUE ~ "League"
-        )
+        ),
+        point_size = coalesce(avg_projected_score_this_week, median(avg_projected_score_this_week, na.rm = TRUE), 55)
       )
 
-    ggplot(plot_df, aes(team_value_total_calc, cash_end_round_calc, color = highlight, size = avg_projected_score_this_week)) +
+    ggplot(plot_df, aes(team_value_total_calc, cash_end_round_calc, color = highlight, size = point_size)) +
       geom_point(alpha = 0.85) +
       geom_text(aes(label = team_name), nudge_y = 15000, size = 3, show.legend = FALSE) +
       scale_x_continuous(labels = label_dollar()) +
@@ -1397,12 +1515,8 @@ server <- function(input, output, session) {
   output$league_snapshot_table <- safe_table({
     latest_ladder_round() %>%
       left_join(
-        dashboard_data()$team_round_stats_history %>%
-          filter(round == snapshot_round()) %>%
-          group_by(user_team_id) %>%
-          slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-          ungroup() %>%
-          select(user_team_id, total_changes, trade_boosts_used),
+        team_stats_snapshot() %>%
+          select(user_team_id, total_changes = stats_total_changes, trade_boosts_used = stats_trade_boosts_used),
         by = "user_team_id"
       ) %>%
       arrange(position) %>%
@@ -1413,7 +1527,7 @@ server <- function(input, output, session) {
         `Round Pts` = round_points,
         `Squad Value` = dollar(team_value_total_calc),
         Cash = dollar(cash_end_round_calc),
-        `Changes` = total_changes,
+        `Changes` = coalesce(total_changes, 0L),
         `Boosts Used` = trade_boosts_used
       )
   })
