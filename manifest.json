@@ -193,33 +193,6 @@
         "Built": "R 4.0.0; ; 2020-04-25 00:36:06 UTC; unix"
       }
     },
-    "backports": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "backports",
-        "Type": "Package",
-        "Title": "Reimplementations of Functions Introduced Since R-3.0.0",
-        "Version": "1.1.6",
-        "Authors@R": "c(\n    person(\"Michel\", \"Lang\", NULL, \"michellang@gmail.com\",\n      role = c(\"cre\", \"aut\"), comment = c(ORCID = \"0000-0001-9754-0393\")),\n    person(\"R Core Team\", role = \"aut\"))",
-        "Maintainer": "Michel Lang <michellang@gmail.com>",
-        "Description": "\n    Functions introduced or changed since R v3.0.0 are re-implemented in this\n    package. The backports are conditionally exported in order to let R resolve\n    the function name to either the implemented backport, or the respective base\n    version, if available. Package developers can make use of new functions or\n    arguments by selectively importing specific backports to\n    support older installations.",
-        "URL": "https://github.com/r-lib/backports",
-        "BugReports": "https://github.com/r-lib/backports/issues",
-        "License": "GPL-2 | GPL-3",
-        "NeedsCompilation": "yes",
-        "ByteCompile": "yes",
-        "Depends": "R (>= 3.0.0)",
-        "Imports": "utils",
-        "Encoding": "UTF-8",
-        "RoxygenNote": "7.1.0",
-        "Packaged": "2020-04-05 06:01:58 UTC; michel",
-        "Author": "Michel Lang [cre, aut] (<https://orcid.org/0000-0001-9754-0393>),\n  R Core Team [aut]",
-        "Repository": "CRAN",
-        "Date/Publication": "2020-04-05 06:30:02 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-25 00:36:51 UTC; unix"
-      }
-    },
     "base64enc": {
       "Source": "CRAN",
       "Repository": "https://cran.rstudio.com/",
@@ -297,35 +270,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2023-05-01 16:40:02 UTC",
         "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2023-06-18 07:15:27 UTC; unix"
-      }
-    },
-    "callr": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "callr",
-        "Title": "Call R from R",
-        "Version": "3.7.3",
-        "Authors@R": "c(\n    person(\"Gábor\", \"Csárdi\", , \"csardi.gabor@gmail.com\", role = c(\"aut\", \"cre\", \"cph\"),\n           comment = c(ORCID = \"0000-0001-7098-9676\")),\n    person(\"Winston\", \"Chang\", role = \"aut\"),\n    person(\"RStudio\", role = c(\"cph\", \"fnd\")),\n    person(\"Mango Solutions\", role = c(\"cph\", \"fnd\"))\n  )",
-        "Description": "It is sometimes useful to perform a computation in a separate\n    R process, without affecting the current R process at all.  This\n    packages does exactly that.",
-        "License": "MIT + file LICENSE",
-        "URL": "https://callr.r-lib.org, https://github.com/r-lib/callr#readme",
-        "BugReports": "https://github.com/r-lib/callr/issues",
-        "Depends": "R (>= 3.4)",
-        "Imports": "processx (>= 3.6.1), R6, utils",
-        "Suggests": "asciicast, cli (>= 1.1.0), covr, mockery, ps, rprojroot,\nspelling, testthat (>= 3.0.0), withr (>= 2.3.0)",
-        "Encoding": "UTF-8",
-        "Language": "en-US",
-        "RoxygenNote": "7.2.1.9000",
-        "Config/testthat/edition": "3",
-        "Config/Needs/website": "r-lib/asciicast, glue, htmlwidgets, igraph,\ntibble, tidyverse/tidytemplate",
-        "NeedsCompilation": "no",
-        "Packaged": "2022-11-02 15:17:20 UTC; gaborcsardi",
-        "Author": "Gábor Csárdi [aut, cre, cph] (<https://orcid.org/0000-0001-7098-9676>),\n  Winston Chang [aut],\n  RStudio [cph, fnd],\n  Mango Solutions [cph, fnd]",
-        "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2022-11-02 16:40:11 UTC",
-        "Built": "R 4.0.0; ; 2023-06-18 08:01:43 UTC; unix"
       }
     },
     "cli": {
@@ -496,34 +440,6 @@
         "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-25 00:40:13 UTC; unix"
       }
     },
-    "desc": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "desc",
-        "Title": "Manipulate DESCRIPTION Files",
-        "Version": "1.2.0",
-        "Authors@R": "c(\n    person(\"Gábor\", \"Csárdi\",, \"csardi.gabor@gmail.com\", role = c(\"aut\", \"cre\")),\n    person(\"Kirill\", \"Müller\", role = c(\"aut\")),\n    person(\"Jim\", \"Hester\", email = \"james.f.hester@gmail.com\", role = c(\"aut\")))",
-        "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-        "Description": "Tools to read, write, create, and manipulate DESCRIPTION files.\n    It is intended for packages that create or manipulate other packages.",
-        "License": "MIT + file LICENSE",
-        "LazyData": "true",
-        "URL": "https://github.com/r-lib/desc#readme",
-        "BugReports": "https://github.com/r-lib/desc/issues",
-        "Depends": "R (>= 3.1.0)",
-        "Suggests": "covr, testthat, whoami, withr",
-        "Imports": "assertthat, utils, R6, crayon, rprojroot",
-        "Encoding": "UTF-8",
-        "RoxygenNote": "6.0.1.9000",
-        "Collate": "'assertions.R' 'authors-at-r.R' 'built.R' 'classes.R'\n'collate.R' 'constants.R' 'deps.R' 'description.R' 'encoding.R'\n'latex.R' 'non-oo-api.R' 'package-archives.R' 'read.R'\n'remotes.R' 'str.R' 'syntax_checks.R' 'urls.R' 'utils.R'\n'validate.R' 'version.R'",
-        "NeedsCompilation": "no",
-        "Packaged": "2018-05-01 20:22:08 UTC; gaborcsardi",
-        "Author": "Gábor Csárdi [aut, cre],\n  Kirill Müller [aut],\n  Jim Hester [aut]",
-        "Repository": "CRAN",
-        "Date/Publication": "2018-05-01 20:48:05 UTC",
-        "Built": "R 4.0.0; ; 2020-04-25 20:42:18 UTC; unix"
-      }
-    },
     "digest": {
       "Source": "CRAN",
       "Repository": "https://cran.rstudio.com/",
@@ -605,33 +521,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2019-09-20 20:40:02 UTC",
         "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-25 00:36:23 UTC; unix"
-      }
-    },
-    "evaluate": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "evaluate",
-        "Type": "Package",
-        "Title": "Parsing and Evaluation Tools that Provide More Details than the\nDefault",
-        "Version": "0.14",
-        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", role = \"aut\"),\n    person(\"Yihui\", \"Xie\", role = c(\"aut\", \"cre\"), email = \"xie@yihui.name\", comment = c(ORCID = \"0000-0003-0645-5666\")),\n    person(\"Michael\", \"Lawrence\", role = \"ctb\"),\n    person(\"Thomas\", \"Kluyver\", role = \"ctb\"),\n    person(\"Jeroen\", \"Ooms\", role = \"ctb\"),\n    person(\"Barret\", \"Schloerke\", role = \"ctb\"),\n    person(\"Adam\", \"Ryczkowski\", role = \"ctb\"),\n    person(\"Hiroaki\", \"Yutani\", role = \"ctb\"),\n    person(\"Michel\", \"Lang\", role = \"ctb\"),\n    person(\"Karolis\", \"Koncevičius\", role = \"ctb\")\n    )",
-        "Description": "Parsing and evaluation tools that make it easy to recreate the\n    command line behaviour of R.",
-        "License": "MIT + file LICENSE",
-        "URL": "https://github.com/r-lib/evaluate",
-        "BugReports": "https://github.com/r-lib/evaluate/issues",
-        "Depends": "R (>= 3.0.2)",
-        "Imports": "methods",
-        "Suggests": "testthat, lattice, ggplot2",
-        "RoxygenNote": "6.1.1",
-        "Encoding": "UTF-8",
-        "NeedsCompilation": "no",
-        "Packaged": "2019-05-28 15:30:02 UTC; yihui",
-        "Author": "Hadley Wickham [aut],\n  Yihui Xie [aut, cre] (<https://orcid.org/0000-0003-0645-5666>),\n  Michael Lawrence [ctb],\n  Thomas Kluyver [ctb],\n  Jeroen Ooms [ctb],\n  Barret Schloerke [ctb],\n  Adam Ryczkowski [ctb],\n  Hiroaki Yutani [ctb],\n  Michel Lang [ctb],\n  Karolis Koncevičius [ctb]",
-        "Maintainer": "Yihui Xie <xie@yihui.name>",
-        "Repository": "CRAN",
-        "Date/Publication": "2019-05-28 15:50:02 UTC",
-        "Built": "R 4.0.0; ; 2020-04-25 00:36:25 UTC; unix"
       }
     },
     "fansi": {
@@ -1041,31 +930,17 @@
     },
     "isoband": {
       "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
+      "Repository": "https://cloud.r-project.org",
       "description": {
         "Package": "isoband",
-        "Title": "Generate Isolines and Isobands from Regularly Spaced Elevation\nGrids",
-        "Version": "0.2.1",
-        "Authors@R": "\n    person(\n      given = \"Claus O.\",\n      family = \"Wilke\",\n      role = c(\"aut\", \"cre\"),\n      email = \"wilke@austin.utexas.edu\",\n      comment = c(ORCID = \"0000-0002-7470-9261\")\n    )",
-        "Description": "A fast C++ implementation to generate contour lines (isolines) and\n  contour polygons (isobands) from regularly spaced grids containing elevation data.",
-        "URL": "https://github.com/wilkelab/isoband",
-        "BugReports": "https://github.com/wilkelab/isoband/issues",
+        "Version": "0.3.0",
+        "Imports": "cli, grid, rlang, utils",
+        "LinkingTo": "cpp11",
+        "Suggests": "covr, ggplot2, knitr, magick, bench, rmarkdown, sf, testthat\n(>= 3.0.0), xml2",
         "License": "MIT + file LICENSE",
-        "Encoding": "UTF-8",
-        "LazyData": "true",
-        "LinkingTo": "Rcpp, testthat",
-        "Imports": "Rcpp, grid, utils",
-        "RoxygenNote": "7.0.2",
-        "Suggests": "covr, ggplot2, knitr, magick, microbenchmark, rmarkdown, sf,\ntestthat",
-        "SystemRequirements": "C++11",
-        "VignetteBuilder": "knitr",
+        "MD5sum": "0b811a225740b6e4ae0afcdd64f11407",
         "NeedsCompilation": "yes",
-        "Packaged": "2020-04-12 08:55:17 UTC; clauswilke",
-        "Author": "Claus O. Wilke [aut, cre] (<https://orcid.org/0000-0002-7470-9261>)",
-        "Maintainer": "Claus O. Wilke <wilke@austin.utexas.edu>",
-        "Repository": "CRAN",
-        "Date/Publication": "2020-04-12 09:40:02 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-26 14:01:38 UTC; unix"
+        "Repository": "https://cloud.r-project.org/src/contrib"
       }
     },
     "jquerylib": {
@@ -1447,33 +1322,6 @@
         "Built": "R 4.0.0; ; 2023-06-18 08:02:38 UTC; unix"
       }
     },
-    "pkgbuild": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "pkgbuild",
-        "Title": "Find Tools Needed to Build R Packages",
-        "Version": "1.0.8",
-        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", role = \"aut\"),\n    person(\"Jim\", \"Hester\", , \"jim.hester@rstudio.com\", role = c(\"aut\", \"cre\")),\n    person(\"RStudio\", role = \"cph\")\n  )",
-        "Description": "Provides functions used to build R packages. Locates compilers\n  needed to build R packages on various platforms and ensures the PATH is\n  configured appropriately so R can use them.",
-        "Imports": "callr (>= 3.2.0), cli, crayon, desc, prettyunits, R6,\nrprojroot, withr (>= 2.1.2)",
-        "Suggests": "Rcpp, testthat, covr",
-        "License": "GPL-3",
-        "Encoding": "UTF-8",
-        "LazyData": "true",
-        "RoxygenNote": "6.1.1",
-        "URL": "https://github.com/r-lib/pkgbuild",
-        "BugReports": "https://github.com/r-lib/pkgbuild/issues",
-        "Depends": "R (>= 3.1)",
-        "NeedsCompilation": "no",
-        "Packaged": "2020-05-06 19:57:03 UTC; jhester",
-        "Author": "Hadley Wickham [aut],\n  Jim Hester [aut, cre],\n  RStudio [cph]",
-        "Maintainer": "Jim Hester <jim.hester@rstudio.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2020-05-07 08:40:13 UTC",
-        "Built": "R 4.0.0; ; 2020-05-11 07:25:38 UTC; unix"
-      }
-    },
     "pkgconfig": {
       "Source": "CRAN",
       "Repository": "https://cran.rstudio.com/",
@@ -1498,55 +1346,6 @@
         "Built": "R 4.0.0; ; 2020-04-25 00:33:43 UTC; unix"
       }
     },
-    "pkgload": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "pkgload",
-        "Title": "Simulate Package Installation and Attach",
-        "Version": "1.0.2",
-        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", role = \"aut\"),\n    person(\"Jim\", \"Hester\", , \"james.hester@rstudio.com\", role = c(\"aut\", \"cre\")),\n    person(\"Winston\", \"Chang\", role = \"aut\"),\n    person(\"RStudio\", role = \"cph\"),\n    person(\"R Core team\", role = \"ctb\",\n      comment = \"Some namespace and vignette code extracted from base R\")\n    )",
-        "Description": "Simulates the process of installing a package\n    and then attaching it. This is a key part of the 'devtools' package as it\n    allows you to rapidly iterate while developing a package.",
-        "License": "GPL-3",
-        "URL": "https://github.com/r-lib/pkgload",
-        "BugReports": "https://github.com/r-lib/pkgload/issues",
-        "Imports": "desc, methods, pkgbuild, rlang, rprojroot, rstudioapi, utils,\nwithr",
-        "Suggests": "bitops, covr, Rcpp, testthat",
-        "Encoding": "UTF-8",
-        "LazyData": "true",
-        "RoxygenNote": "6.1.0",
-        "NeedsCompilation": "yes",
-        "Packaged": "2018-10-29 19:56:19 UTC; jhester",
-        "Author": "Hadley Wickham [aut],\n  Jim Hester [aut, cre],\n  Winston Chang [aut],\n  RStudio [cph],\n  R Core team [ctb] (Some namespace and vignette code extracted from base\n    R)",
-        "Maintainer": "Jim Hester <james.hester@rstudio.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2018-10-29 20:30:03 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-26 08:52:14 UTC; unix"
-      }
-    },
-    "praise": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "praise",
-        "Title": "Praise Users",
-        "Version": "1.0.0",
-        "Author": "Gabor Csardi, Sindre Sorhus",
-        "Maintainer": "Gabor Csardi <csardi.gabor@gmail.com>",
-        "Description": "Build friendly R packages that\n    praise their users if they have done something\n    good, or they just need it to feel better.",
-        "License": "MIT + file LICENSE",
-        "LazyData": "true",
-        "URL": "https://github.com/gaborcsardi/praise",
-        "BugReports": "https://github.com/gaborcsardi/praise/issues",
-        "Suggests": "testthat",
-        "Collate": "'adjective.R' 'adverb.R' 'exclamation.R' 'verb.R' 'rpackage.R'\n'package.R'",
-        "NeedsCompilation": "no",
-        "Packaged": "2015-08-11 02:01:43 UTC; gaborcsardi",
-        "Repository": "CRAN",
-        "Date/Publication": "2015-08-11 08:22:28",
-        "Built": "R 4.0.0; ; 2020-04-25 00:37:17 UTC; unix"
-      }
-    },
     "prettyunits": {
       "Source": "CRAN",
       "Repository": "https://cran.rstudio.com/",
@@ -1569,34 +1368,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2020-01-24 06:50:07 UTC",
         "Built": "R 4.0.0; ; 2020-04-25 00:37:02 UTC; unix"
-      }
-    },
-    "processx": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "processx",
-        "Title": "Execute and Control System Processes",
-        "Version": "3.8.1",
-        "Authors@R": "c(\n    person(\"Gábor\", \"Csárdi\", , \"csardi.gabor@gmail.com\", role = c(\"aut\", \"cre\", \"cph\"),\n           comment = c(ORCID = \"0000-0001-7098-9676\")),\n    person(\"Winston\", \"Chang\", role = \"aut\"),\n    person(\"RStudio\", role = c(\"cph\", \"fnd\")),\n    person(\"Mango Solutions\", role = c(\"cph\", \"fnd\"))\n  )",
-        "Description": "Tools to run system processes in the background.  It can\n    check if a background process is running; wait on a background process\n    to finish; get the exit status of finished processes; kill background\n    processes. It can read the standard output and error of the processes,\n    using non-blocking connections. 'processx' can poll a process for\n    standard output or error, with a timeout. It can also poll several\n    processes at once.",
-        "License": "MIT + file LICENSE",
-        "URL": "https://processx.r-lib.org,\nhttps://github.com/r-lib/processx#readme",
-        "BugReports": "https://github.com/r-lib/processx/issues",
-        "Depends": "R (>= 3.4.0)",
-        "Imports": "ps (>= 1.2.0), R6, utils",
-        "Suggests": "callr (>= 3.7.3), cli (>= 3.3.0), codetools, covr, curl,\ndebugme, parallel, rlang (>= 1.0.2), testthat (>= 3.0.0),\nwebfakes, withr",
-        "Encoding": "UTF-8",
-        "RoxygenNote": "7.2.0",
-        "Config/testthat/edition": "3",
-        "Config/Needs/website": "tidyverse/tidytemplate",
-        "NeedsCompilation": "yes",
-        "Packaged": "2023-04-18 10:30:48 UTC; gaborcsardi",
-        "Author": "Gábor Csárdi [aut, cre, cph] (<https://orcid.org/0000-0001-7098-9676>),\n  Winston Chang [aut],\n  RStudio [cph, fnd],\n  Mango Solutions [cph, fnd]",
-        "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2023-04-18 11:10:02 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2023-06-18 07:55:20 UTC; unix"
       }
     },
     "promises": {
@@ -1627,33 +1398,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2021-02-11 19:00:02 UTC",
         "Built": "R 4.0.2; x86_64-apple-darwin17.0; 2021-02-12 11:41:27 UTC; unix"
-      }
-    },
-    "ps": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "ps",
-        "Version": "1.3.3",
-        "Title": "List, Query, Manipulate System Processes",
-        "Description": "List, query and manipulate all system processes, on 'Windows',\n    'Linux' and 'macOS'.",
-        "Authors@R": "c(\n    person(\"Jay\", \"Loden\", role = \"aut\"),\n    person(\"Dave\", \"Daeschler\", role = \"aut\"),\n    person(\"Giampaolo\", \"Rodola'\", role = \"aut\"),\n    person(\"Gábor\", \"Csárdi\", , \"csardi.gabor@gmail.com\", c(\"aut\", \"cre\")),\n    person(\"RStudio\", role = \"cph\"))",
-        "License": "BSD_3_clause + file LICENSE",
-        "URL": "https://github.com/r-lib/ps#readme",
-        "BugReports": "https://github.com/r-lib/ps/issues",
-        "Encoding": "UTF-8",
-        "Depends": "R (>= 3.1)",
-        "Imports": "utils",
-        "Suggests": "callr, covr, curl, pingr, processx (>= 3.1.0), R6, rlang,\ntestthat, tibble",
-        "RoxygenNote": "7.0.2.9000",
-        "Biarch": "true",
-        "NeedsCompilation": "yes",
-        "Packaged": "2020-05-07 21:14:24 UTC; gaborcsardi",
-        "Author": "Jay Loden [aut],\n  Dave Daeschler [aut],\n  Giampaolo Rodola' [aut],\n  Gábor Csárdi [aut, cre],\n  RStudio [cph]",
-        "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2020-05-08 08:50:02 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-05-11 05:53:04 UTC; unix"
       }
     },
     "purrr": {
@@ -1744,35 +1488,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2023-04-28 22:30:03 UTC",
         "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2023-06-18 07:17:32 UTC; unix"
-      }
-    },
-    "rprojroot": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "rprojroot",
-        "Title": "Finding Files in Project Subdirectories",
-        "Version": "1.3-2",
-        "Authors@R": "person(given = \"Kirill\", family = \"Müller\", role = c(\"aut\",\n        \"cre\"), email = \"krlmlr+r@mailbox.org\")",
-        "Description": "Robust, reliable and flexible paths to files below a\n    project root. The 'root' of a project is defined as a directory\n    that matches a certain criterion, e.g., it contains a certain\n    regular file.",
-        "Depends": "R (>= 3.0.0)",
-        "Imports": "backports",
-        "Suggests": "testthat, mockr, knitr, withr, rmarkdown",
-        "VignetteBuilder": "knitr",
-        "License": "GPL-3",
-        "LazyData": "true",
-        "Encoding": "UTF-8",
-        "URL": "https://github.com/krlmlr/rprojroot,\nhttps://krlmlr.github.io/rprojroot",
-        "BugReports": "https://github.com/krlmlr/rprojroot/issues",
-        "RoxygenNote": "6.0.1",
-        "Collate": "'rrmake.R' 'criterion.R' 'file.R' 'has-file.R' 'root.R'\n'rprojroot-package.R' 'shortcut.R' 'thisfile.R'",
-        "NeedsCompilation": "no",
-        "Packaged": "2018-01-03 13:27:15 UTC; muelleki",
-        "Author": "Kirill Müller [aut, cre]",
-        "Maintainer": "Kirill Müller <krlmlr+r@mailbox.org>",
-        "Repository": "CRAN",
-        "Date/Publication": "2018-01-03 15:36:24 UTC",
-        "Built": "R 4.0.0; ; 2020-04-25 14:41:24 UTC; unix"
       }
     },
     "rstudioapi": {
@@ -1997,34 +1712,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2019-08-21 14:20:02 UTC",
         "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-25 00:38:47 UTC; unix"
-      }
-    },
-    "testthat": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "testthat",
-        "Title": "Unit Testing for R",
-        "Version": "2.3.2",
-        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", , \"hadley@rstudio.com\", c(\"aut\", \"cre\")),\n    person(\"RStudio\", role = c(\"cph\", \"fnd\")),\n    person(\"R Core team\", role = \"ctb\",\n      comment = \"Implementation of utils::recover()\")\n    )",
-        "Description": "Software testing is important, but, in part because it is \n    frustrating and boring, many of us avoid it. 'testthat' is a testing framework \n    for R that is easy to learn and use, and integrates with your existing 'workflow'.",
-        "License": "MIT + file LICENSE",
-        "URL": "http://testthat.r-lib.org, https://github.com/r-lib/testthat",
-        "BugReports": "https://github.com/r-lib/testthat/issues",
-        "Depends": "R (>= 3.1)",
-        "Imports": "cli, crayon (>= 1.3.4), digest, ellipsis, evaluate, magrittr,\nmethods, pkgload, praise, R6 (>= 2.2.0), rlang (>= 0.4.1),\nwithr (>= 2.0.0)",
-        "Suggests": "covr, curl (>= 0.9.5), devtools, knitr, rmarkdown, usethis,\nvctrs (>= 0.1.0), xml2",
-        "VignetteBuilder": "knitr",
-        "Encoding": "UTF-8",
-        "RoxygenNote": "7.0.2",
-        "Collate": "'auto-test.R' 'capture-condition.R' 'capture-output.R'\n'colour-text.R' 'compare.R' 'compare-character.R'\n'compare-numeric.R' 'compare-time.R' 'context.R' 'describe.R'\n'evaluate-promise.R' 'example.R' 'expect-comparison.R'\n'expect-condition.R' 'expect-equality.R' 'expect-inheritance.R'\n'expect-invisible.R' 'expect-known.R' 'expect-length.R'\n'expect-logical.R' 'expect-messages.R' 'expect-named.R'\n'expect-null.R' 'expect-output.R' 'reporter.R'\n'expect-self-test.R' 'expect-setequal.R' 'expect-silent.R'\n'expect-that.R' 'expect-vector.R' 'expectation.R'\n'expectations-matches.R' 'make-expectation.R' 'mock.R'\n'old-school.R' 'praise.R' 'quasi-label.R' 'recover.R'\n'reporter-check.R' 'reporter-debug.R' 'reporter-fail.R'\n'reporter-junit.R' 'reporter-list.R' 'reporter-location.R'\n'reporter-minimal.R' 'reporter-multi.R' 'stack.R'\n'reporter-progress.R' 'reporter-rstudio.R' 'reporter-silent.R'\n'reporter-stop.R' 'reporter-summary.R' 'reporter-tap.R'\n'reporter-teamcity.R' 'reporter-zzz.R' 'skip.R' 'source.R'\n'teardown.R' 'test-compiled-code.R' 'test-directory.R'\n'test-example.R' 'test-files.R' 'test-path.R' 'test-that.R'\n'try-again.R' 'utils-io.R' 'utils.R' 'verify-output.R'\n'watcher.R'",
-        "NeedsCompilation": "yes",
-        "Packaged": "2020-03-02 14:59:34 UTC; hadley",
-        "Author": "Hadley Wickham [aut, cre],\n  RStudio [cph, fnd],\n  R Core team [ctb] (Implementation of utils::recover())",
-        "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
-        "Repository": "CRAN",
-        "Date/Publication": "2020-03-02 15:40:02 UTC",
-        "Built": "R 4.0.0; x86_64-apple-darwin17.0; 2020-04-26 12:11:48 UTC; unix"
       }
     },
     "tibble": {
@@ -2255,31 +1942,6 @@
         "Repository": "CRAN",
         "Date/Publication": "2022-03-03 21:50:02 UTC",
         "Built": "R 4.0.5; ; 2022-03-04 11:22:52 UTC; unix"
-      }
-    },
-    "xtable": {
-      "Source": "CRAN",
-      "Repository": "https://cran.rstudio.com/",
-      "description": {
-        "Package": "xtable",
-        "Version": "1.8-8",
-        "Date": "2026-02-20",
-        "Title": "Export Tables to LaTeX or HTML",
-        "Authors@R": "c(person(\"David B.\", \"Dahl\", role=\"aut\"),\n             person(\"David\", \"Scott\", role=c(\"aut\",\"cre\"),\n               email=\"d.scott@auckland.ac.nz\"),\n             person(\"Charles\", \"Roosen\", role=\"aut\"),\n             person(\"Arni\", \"Magnusson\", role=\"aut\"),\n             person(\"Jonathan\", \"Swinton\", role=\"aut\"),\n             person(\"Ajay\", \"Shah\", role=\"ctb\"),\n             person(\"Arne\", \"Henningsen\", role=\"ctb\"),\n             person(\"Benno\", \"Puetz\", role=\"ctb\"),\n             person(\"Bernhard\", \"Pfaff\", role=\"ctb\"),\n             person(\"Claudio\", \"Agostinelli\", role=\"ctb\"),\n             person(\"Claudius\", \"Loehnert\", role=\"ctb\"),\n             person(\"David\", \"Mitchell\", role=\"ctb\"),\n             person(\"David\", \"Whiting\", role=\"ctb\"),\n             person(\"Fernando da\", \"Rosa\", role=\"ctb\"),\n             person(\"Guido\", \"Gay\", role=\"ctb\"),\n             person(\"Guido\", \"Schulz\", role=\"ctb\"),\n             person(\"Ian\", \"Fellows\", role=\"ctb\"),\n             person(\"Jeff\", \"Laake\", role=\"ctb\"),\n             person(\"John\", \"Walker\", role=\"ctb\"),\n             person(\"Jun\", \"Yan\", role=\"ctb\"),\n             person(\"Liviu\", \"Andronic\", role=\"ctb\"),\n             person(\"Markus\", \"Loecher\", role=\"ctb\"),\n             person(\"Martin\", \"Gubri\", role=\"ctb\"),\n             person(\"Matthieu\", \"Stigler\", role=\"ctb\"),\n             person(\"Robert\", \"Castelo\", role=\"ctb\"),\n             person(\"Seth\", \"Falcon\", role=\"ctb\"),\n             person(\"Stefan\", \"Edwards\", role=\"ctb\"),\n             person(\"Sven\", \"Garbade\", role=\"ctb\"),\n             person(\"Uwe\", \"Ligges\", role=\"ctb\"))",
-        "Maintainer": "David Scott <d.scott@auckland.ac.nz>",
-        "Imports": "stats, utils, methods",
-        "Suggests": "knitr, zoo, survival, glue, tinytex",
-        "VignetteBuilder": "knitr",
-        "Description": "Coerce data to LaTeX and HTML tables.",
-        "URL": "http://xtable.r-forge.r-project.org/",
-        "Depends": "R (>= 2.10.0)",
-        "License": "GPL (>= 2)",
-        "Repository": "CRAN",
-        "NeedsCompilation": "no",
-        "Packaged": "2026-02-20 02:51:53 UTC; dsco0",
-        "Author": "David B. Dahl [aut],\n  David Scott [aut, cre],\n  Charles Roosen [aut],\n  Arni Magnusson [aut],\n  Jonathan Swinton [aut],\n  Ajay Shah [ctb],\n  Arne Henningsen [ctb],\n  Benno Puetz [ctb],\n  Bernhard Pfaff [ctb],\n  Claudio Agostinelli [ctb],\n  Claudius Loehnert [ctb],\n  David Mitchell [ctb],\n  David Whiting [ctb],\n  Fernando da Rosa [ctb],\n  Guido Gay [ctb],\n  Guido Schulz [ctb],\n  Ian Fellows [ctb],\n  Jeff Laake [ctb],\n  John Walker [ctb],\n  Jun Yan [ctb],\n  Liviu Andronic [ctb],\n  Markus Loecher [ctb],\n  Martin Gubri [ctb],\n  Matthieu Stigler [ctb],\n  Robert Castelo [ctb],\n  Seth Falcon [ctb],\n  Stefan Edwards [ctb],\n  Sven Garbade [ctb],\n  Uwe Ligges [ctb]",
-        "Date/Publication": "2026-02-22 11:20:02 UTC",
-        "Built": "R 4.0.0; ; 2026-04-07 08:33:48 UTC; unix"
       }
     }
   },

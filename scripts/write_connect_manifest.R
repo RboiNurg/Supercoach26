@@ -1,5 +1,6 @@
 suppressPackageStartupMessages({
   library(rsconnect)
+  library(jsonlite)
 })
 
 league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
@@ -51,6 +52,54 @@ writeManifest(
   appDir = ".",
   appFiles = app_files,
   appPrimaryDoc = "app.R"
+)
+
+manifest <- read_json("manifest.json", simplifyVector = FALSE)
+
+drop_packages <- c(
+  "backports",
+  "callr",
+  "desc",
+  "evaluate",
+  "pkgbuild",
+  "pkgload",
+  "praise",
+  "processx",
+  "ps",
+  "rprojroot",
+  "testthat",
+  "xtable"
+)
+
+manifest$packages[drop_packages] <- NULL
+
+cran_db <- available.packages(repos = "https://cloud.r-project.org")
+
+if ("isoband" %in% rownames(cran_db)) {
+  fields <- colnames(cran_db)
+  fields <- fields[fields != "Package"]
+
+  isoband_desc <- list(Package = "isoband")
+  for (field in fields) {
+    value <- cran_db["isoband", field]
+    if (!is.na(value) && nzchar(value)) {
+      isoband_desc[[field]] <- value
+    }
+  }
+
+  manifest$packages$isoband <- list(
+    Source = "CRAN",
+    Repository = "https://cloud.r-project.org",
+    description = isoband_desc
+  )
+}
+
+write_json(
+  manifest,
+  "manifest.json",
+  auto_unbox = TRUE,
+  pretty = TRUE,
+  null = "null"
 )
 
 cat("manifest.json written for Connect Cloud deployment.\n")
