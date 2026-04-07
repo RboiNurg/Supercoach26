@@ -1,0 +1,65 @@
+name: SuperCoach Analysis Export
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_first:
+        description: Refresh live data before building the GPT pack
+        required: true
+        default: true
+        type: boolean
+      notes:
+        description: Optional note for this export
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  SC_LEAGUE_ID: "21064"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+
+      - name: Install R packages
+        run: |
+          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr","googledrive"), repos = "https://cloud.r-project.org")'
+
+      - name: Validate SuperCoach secret when refresh is requested
+        if: inputs.refresh_first
+        env:
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+        run: |
+          if [ -z "${SC_BEARER}" ]; then
+            echo "SC_BEARER GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+      - name: Build analysis export
+        env:
+          EXPORT_REFRESH_FIRST: ${{ inputs.refresh_first }}
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
+        run: |
+          Rscript scripts/run_analysis_export.R
+
+      - name: Upload GPT pack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supercoach-analysis-pack-${{ github.run_id }}
+          path: data/supercoach_league_21064/analysis_export
+          if-no-files-found: error

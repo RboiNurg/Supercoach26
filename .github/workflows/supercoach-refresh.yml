@@ -1,0 +1,152 @@
+name: SuperCoach Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: Optional note for this refresh run
+        required: false
+        type: string
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: supercoach-refresh-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  SC_LEAGUE_ID: "21064"
+  REFRESH_GATE_TZ: Australia/Sydney
+  DAILY_REFRESH_TIMES_SYD: 08:05,13:05,18:05
+  PRE_GAME_REFRESH_MINUTES: 60,30,15
+  DAILY_TOLERANCE_MINUTES: "4"
+  PRE_GAME_TOLERANCE_MINUTES: "4"
+  COMMIT_REFRESHED_DATA_TO_GIT: "true"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      run_reason: ${{ steps.gate.outputs.run_reason }}
+      matched_games: ${{ steps.gate.outputs.matched_games }}
+      evaluated_at: ${{ steps.gate.outputs.evaluated_at }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Evaluate refresh gate
+        id: gate
+        env:
+          REFRESH_GATE_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          Rscript scripts/refresh_schedule_gate.R >> "$GITHUB_OUTPUT"
+
+      - name: Print gate decision
+        run: |
+          echo "should_run=${{ steps.gate.outputs.should_run }}"
+          echo "run_reason=${{ steps.gate.outputs.run_reason }}"
+          echo "matched_games=${{ steps.gate.outputs.matched_games }}"
+          echo "evaluated_at=${{ steps.gate.outputs.evaluated_at }}"
+
+  refresh:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+
+      - name: Install R packages
+        run: |
+          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr","googledrive"), repos = "https://cloud.r-project.org")'
+
+      - name: Validate SuperCoach secret
+        env:
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+        run: |
+          if [ -z "${SC_BEARER}" ]; then
+            echo "SC_BEARER GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+      - name: Run refresh pipeline
+        env:
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
+        run: |
+          Rscript scripts/run_refresh_pipeline.R
+
+      - name: Generate matchup trade alerts
+        id: matchup_alerts
+        run: |
+          Rscript scripts/generate_matchup_trade_alerts.R >> "$GITHUB_OUTPUT"
+
+      - name: Warn when alerts exist but email is not configured
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO == ''
+        run: |
+          echo "Matchup alerts were detected but email secrets are not configured."
+
+      - name: Send matchup alert email
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.ALERT_EMAIL_SMTP_SERVER }}
+          server_port: ${{ secrets.ALERT_EMAIL_SMTP_PORT }}
+          username: ${{ secrets.ALERT_EMAIL_USERNAME }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: ${{ steps.matchup_alerts.outputs.email_subject }}
+          to: ${{ secrets.ALERT_EMAIL_TO }}
+          from: ${{ secrets.ALERT_EMAIL_FROM }}
+          body: ${{ steps.matchup_alerts.outputs.email_body }}
+
+      - name: Mark matchup alerts as sent
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO != ''
+        env:
+          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
+        run: |
+          Rscript scripts/mark_matchup_trade_alerts_sent.R
+          Rscript -e "source('scripts/google_drive_bundle_sync.R'); upload_data_bundle_to_drive(file.path('data', paste0('supercoach_league_', Sys.getenv('SC_LEAGUE_ID', '21064'))), as.integer(Sys.getenv('SC_LEAGUE_ID', '21064')))"
+
+      - name: Upload refreshed data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supercoach-data-${{ github.run_id }}
+          path: data/supercoach_league_21064
+          if-no-files-found: error
+
+      - name: Commit refreshed data
+        if: env.COMMIT_REFRESHED_DATA_TO_GIT == 'true'
+        env:
+          TRIGGER_REASON: ${{ needs.gate.outputs.run_reason }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No data changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/supercoach_league_21064
+          git commit -m "[auto] Refresh SuperCoach data (${TRIGGER_REASON})"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

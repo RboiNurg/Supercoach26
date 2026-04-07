@@ -1,3 +1,189 @@
+# SuperCoach Weekly Analysis Pack
+
+- Generated at: 2026-04-07 18:58:10 AEST
+- League ID: 21064
+- Current round: 5
+- Next round: 6
+- Your team: Grog Baguettes (Greg)
+- Current matchup: Gordonites (Daniel)
+
+## Source freshness
+| run_ts | current_round | mutable_rounds | rounds_pulled | fixture_rounds_pulled | player_history_refreshed_n | nrl_fixture_rounds_pulled | nrl_ladder_rounds_pulled |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-07 18:34:22 AEST | 5 | 4,5 | 4,5 | 4,5,6 | 262 | 4,5,6,7,8,9,10 | 4,5 |
+| 2026-04-07 18:18:43 AEST | 5 | 4,5 | 4,5 | 4,5,6 | 262 | 4,5,6,7,8,9,10 | 4,5 |
+| 2026-04-07 17:59:10 AEST | 5 | 4,5 | 4,5 | 4,5,6 | 262 | 4,5,6,7,8,9,10 | 4,5 |
+
+## Current matchup snapshot
+| side | team_name | coach_name | position | round_points | total_points | team_value_total_calc | cash_end_round_calc | total_changes | trade_boosts_used | avg_projected_score_this_week | locked_players | dpp_players |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opponent | Gordonites  | Daniel | 4 | 1168 | 6226 | $13,673,500 | $115,700 | NA | 2 | 56.4 | 0 | 7 |
+| You | Grog Baguettes | Greg | 11 | 942 | 5747 | $13,406,800 | $58,600 | 9 | 2 | 50.9 | 0 | 5 |
+
+## Next SuperCoach league opponents
+| round | opponent_team | opponent_coach | current_fixture_points |
+| --- | --- | --- | --- |
+| 5 | Gordonites  | Daniel | 1168 |
+| 6 | Waterboys | william | 0 |
+
+## League pulse
+| position | team_name | coach_name | round_points | total_points | team_value | bank |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Slewisbrah RLFC | Lewis | 1199 | 6238 | $13,829,500 | $39,000 |
+| 2 | Crows | sam | 1186 | 6200 | $13,873,500 | $303,600 |
+| 3 | Jerky Turkeys | Joe | 1221 | 6210 | $13,900,300 | $185,900 |
+| 4 | Gordonites  | Daniel | 1168 | 6226 | $13,673,500 | $115,700 |
+| 5 | Magnetic cucumbers | Daniel | 1153 | 6147 | $13,590,900 | $135,200 |
+| 6 | Lord of the Grims | Alex | 1101 | 6110 | $13,839,100 | $72,100 |
+| 7 | Spearmint Rhinos | Zaine | 1163 | 6036 | $13,849,800 | $52,800 |
+| 8 | Hebudeh | sam | 1334 | 6166 | $13,889,500 | $18,300 |
+
+## Availability and lockout watch
+| side | player | team | risk_band | status | currently_locked | projected_score_this_week |
+| --- | --- | --- | --- | --- | --- | --- |
+| Opponent | Farnworth, Herbie | DOL | high | Bye Next Round | FALSE | 85.7 |
+| You | Farnworth, Herbie | DOL | high | Bye Next Round | FALSE | 85.7 |
+
+## Your squad leverage watch
+| player | team | next_opponent | next_matchup_rating | next_3_rounds_difficulty | schedule_swing_indicator | projected_score_next_3_weeks | projected_value_change_next_3_weeks | keeper_status | sell_urgency |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Howarth, Jack | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal |
+| Leo, Moses | MEL | NZL | 21.3 | 21.1 | stable | NA | NA | non_keeper | normal |
+| Tedesco, James | SYD | SHA | 22.9 | 26.1 | stable | NA | NA | keeper | normal |
+| Farnworth, Herbie | DOL | NA | NA | 21.0 | harder_short_term | 82.0 | NA | keeper | normal |
+| Martin, Noah | CBR | STH | 17.3 | 20.4 | stable | 75.8 | NA | non_keeper | normal |
+| Chan, Joe | MEL | NZL | 21.3 | 21.1 | stable | 75.8 | NA | non_keeper | normal |
+| Warbrick, William | MEL | NZL | 21.3 | 21.1 | stable | 71.6 | NA | non_keeper | normal |
+| Yeo, Isaah | PTH | BUL | 34.0 | 36.3 | stable | 71.2 | NA | non_keeper | normal |
+| Brailey, Blayke | SHA | SYD | 27.3 | 22.7 | easier_short_term | 69.0 | NA | non_keeper | normal |
+| Hau, Arama | GCT | PAR | 23.3 | 24.4 | stable | 68.8 | NA | non_keeper | normal |
+| Walsh, Reece | BRO | NQC | 18.3 | 22.9 | harder_short_term | 67.0 | NA | keeper | normal |
+| Haas, Payne | BRO | NQC | 18.3 | 22.9 | harder_short_term | 60.8 | NA | keeper | normal |
+| Colquhoun, Jesse | SHA | SYD | 27.3 | 22.7 | easier_short_term | 53.2 | NA | non_keeper | normal |
+| Moses, Mitchell | PAR | GCT | 23.3 | 22.1 | stable | 50.2 | NA | non_keeper | normal |
+
+## Opponent squad profile
+| player | team | next_opponent | next_matchup_rating | projected_score_next_3_weeks | risk_band | currently_locked |
+| --- | --- | --- | --- | --- | --- | --- |
+| Smith, Brandon | STH | CBR | 26.3 | NA | low | FALSE |
+| Couchman, Ryan | STG | MNL | 18.4 | NA | low | FALSE |
+| Tu, Setu | STG | MNL | 18.4 | NA | low | FALSE |
+| Cleary, Nathan | PTH | BUL | 34.0 | 95.0 | low | FALSE |
+| Farnworth, Herbie | DOL | NA | NA | 82.0 | high | FALSE |
+| Martin, Noah | CBR | STH | 17.3 | 75.8 | low | FALSE |
+| Chan, Joe | MEL | NZL | 21.3 | 75.8 | low | FALSE |
+| Luki, Heilum | NQC | BRO | 21.3 | 73.6 | low | FALSE |
+| Mitchell, Latrell | STH | CBR | 26.3 | 73.4 | low | FALSE |
+| Grant, Harry | MEL | NZL | 21.3 | 72.2 | low | FALSE |
+| Lucas, Dylan | NEW | WST | 20.3 | 71.0 | low | FALSE |
+| Hau, Arama | GCT | PAR | 23.3 | 68.8 | low | FALSE |
+| Trbojevic, Tom | MNL | STG | 31.0 | 68.0 | low | FALSE |
+| Walsh, Reece | BRO | NQC | 18.3 | 67.0 | low | FALSE |
+
+## Market watchlist for next round
+| player | team | next_opponent | current_price | recent_average | next_matchup_rating | projected_price_rise_next_round | schedule_swing_indicator | cash_cow_maturity_status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Jenkins, Thomas | PTH | BUL | $872,200 | 121.7 | 34.0 | $-270,300 | stable | near_peak_or_peaked |
+| Cleary, Nathan | PTH | BUL | $859,600 | 100.3 | 34.0 | $-30,754 | stable | near_peak_or_peaked |
+| Hynes, Nicholas | SHA | SYD | $808,800 | 108.3 | 27.3 | $-49,025 | easier_short_term | near_peak_or_peaked |
+| McLean, Casey | PTH | BUL | $691,000 | 88.3 | 34.0 | $-29,897 | stable | near_peak_or_peaked |
+| Drinkwater, Scott | NQC | BRO | $768,500 | 92.3 | 21.3 | $30,744 | stable | rising |
+| Edwards, Dylan | PTH | BUL | $732,700 | 80.0 | 34.0 | $56,677 | stable | rising |
+| Clifford, Jake | NQC | BRO | $684,400 | 103.3 | 21.3 | $-171,305 | stable | near_peak_or_peaked |
+| Purdue, Jaxon | NQC | BRO | $713,700 | 97.0 | 21.3 | $-151,269 | stable | near_peak_or_peaked |
+| Campbell, Jayden | GCT | PAR | $738,400 | 88.0 | 23.3 | $-18,094 | stable | near_peak_or_peaked |
+| Pearce-Paul, Kai | WST | NEW | $696,600 | 90.3 | 22.7 | $-84,833 | stable | near_peak_or_peaked |
+| Papali'i, Isaiah | PTH | BUL | $657,500 | 74.7 | 34.0 | NA | stable | NA |
+| Yeo, Isaah | PTH | BUL | $660,000 | 77.0 | 34.0 | $-48,233 | stable | near_peak_or_peaked |
+| Staggs, Kotoni | BRO | NQC | $685,800 | 85.7 | 18.3 | $-44,431 | harder_short_term | near_peak_or_peaked |
+| May, Terrell | WST | NEW | $743,000 | 73.0 | 22.7 | $75,978 | stable | rising |
+| Fa'alogo, Sua | MEL | NZL | $746,700 | 79.0 | 21.3 | NA | stable | NA |
+| Hughes, Jahrome | MEL | NZL | $733,200 | 84.7 | 21.3 | $-91,831 | stable | near_peak_or_peaked |
+
+## Cash generator watch
+| player | team | next_opponent | current_price | projected_price_rise_next_round | cumulative_cash_generation | cash_cow_maturity_status | player_classification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Roddy, Joe | CBR | STH | $235,600 | $810,324 | $0 | rising | cash_cow |
+| Fale, David | STG | MNL | $235,600 | $514,308 | $0 | rising | cash_cow |
+| Rodwell, Tom | SYD | SHA | $235,600 | $386,034 | $0 | rising | cash_cow |
+| Graham-Taufa, Moala | STH | CBR | $352,000 | $358,439 | $0 | rising | stepping_stone |
+| Makasini, Heamasi | WST | NEW | $332,700 | $328,403 | $97,100 | rising | cash_cow |
+| Fuller, Trai | DOL | NA | $559,400 | $308,914 | $0 | rising | stepping_stone |
+| Hoeter, Delouise | BRO | NQC | $235,600 | $257,760 | $0 | rising | cash_cow |
+| Tsougranis, Nick | STG | MNL | $235,600 | $228,159 | $0 | rising | cash_cow |
+| Brimson, Alexander | GCT | PAR | $466,500 | $184,736 | $-182,800 | rising | stepping_stone |
+| Tuivasa-Sheck, Roger | NZL | MEL | $496,500 | $184,337 | $-173,900 | rising | stepping_stone |
+| Healey, Sam | NZL | MEL | $305,800 | $177,693 | $-124,000 | rising | stepping_stone |
+| Paulo, Jaxson | NQC | BRO | $397,000 | $175,298 | $0 | rising | stepping_stone |
+| Gutherson, Clint | STG | MNL | $480,500 | $170,736 | $-168,200 | rising | stepping_stone |
+| Hopwood, Cody | NEW | WST | $235,600 | $168,956 | $0 | rising | cash_cow |
+
+## NRL context watch
+| side | round | club | opponent | player_count | home_away | travel_burden | projected_team_scoring_environment | matchup_rating_by_team | schedule_swing_indicator |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opponent | 5 | MEL | PTH | 4 | away | high | 19.0 | 19.0 | stable |
+| Opponent | 5 | STH | BUL | 3 | home | home | 18.0 | 18.0 | harder_short_term |
+| Opponent | 5 | BRO | GCT | 2 | away | medium | 23.0 | 23.0 | stable |
+| Opponent | 5 | CBR | NEW | 2 | away | high | 18.0 | 18.0 | stable |
+| Opponent | 5 | GCT | BRO | 2 | home | home | 19.7 | 19.7 | stable |
+| Opponent | 5 | NEW | CBR | 2 | home | home | 26.7 | 26.7 | stable |
+| Opponent | 5 | NQC | STG | 2 | away | NA | 28.7 | 28.7 | stable |
+| Opponent | 5 | STG | NQC | 2 | home | home | 23.0 | 23.0 | easier_short_term |
+| Opponent | 5 | WST | PAR | 2 | away | low | 32.0 | 32.0 | stable |
+| Opponent | 5 | DOL | MNL | 1 | home | home | 28.6 | 28.6 | easier_short_term |
+| Opponent | 5 | MNL | DOL | 1 | away | high | 16.3 | 16.3 | harder_short_term |
+| Opponent | 5 | PAR | WST | 1 | home | home | 23.3 | 23.3 | stable |
+| Opponent | 5 | PTH | MEL | 1 | home | home | 30.0 | 30.0 | stable |
+| Opponent | 5 | SHA | NZL | 1 | home | home | 16.7 | 16.7 | stable |
+| Opponent | 6 | MEL | NZL | 4 | home | home | 21.3 | 21.3 | stable |
+| Opponent | 6 | STH | CBR | 3 | home | home | 26.3 | 26.3 | harder_short_term |
+| Opponent | 6 | BRO | NQC | 2 | home | home | 18.3 | 18.3 | harder_short_term |
+| Opponent | 6 | CBR | STH | 2 | away | high | 17.3 | 17.3 | stable |
+
+## Opponent trade behaviour
+| round | inferred_trade_events | inferred_players_in | actual_trade_count | trade_boosts_used | behaviour_source |
+| --- | --- | --- | --- | --- | --- |
+| 5 | 1 | 26 | NA | 2 | snapshot_inference_plus_team_stats |
+| 4 | 1 | 26 | NA | 1 | snapshot_inference_plus_team_stats |
+| 3 | 1 | 26 | NA | 0 | snapshot_inference_plus_team_stats |
+| 2 | 1 | 26 | NA | 0 | snapshot_inference_plus_team_stats |
+| 1 | 1 | 26 | NA | NA | snapshot_inference_plus_team_stats |
+
+## Long-horizon planning snapshot
+| team_name | coach_name | current_round | current_squad_value | projected_score_next_3_weeks | trades_remaining | boosts_remaining | finals_round | next_bye_rounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Grog Baguettes | Greg | 5 | $13,348,200 | 1,301.8 | 37 | 3 | 23 | c(12, 13, 15, 16, 18, 19) |
+
+## Origin watch
+_Origin watch file is empty. Fill `data/.../manual_inputs/origin_watch.csv` when you want probable or official Origin notes included._
+
+## Manual weekly notes
+# Weekly context notes
+
+- Add any rumours, beat-reporter notes, or manual context here.
+- This file is optional and will be included in the GPT export when populated.
+
+## Coverage gaps and caveats
+| checklist_item | status | notes |
+| --- | --- | --- |
+| game_rules_round_state | partial | Confirmed competition rules, lockout window, squad limits, bye rounds, and player lock state via list columns; Origin-specific rounds remain unavailable. |
+| master_player_table | partial | Current price, status, team, DPP, history lists, and recent averages are confirmed; breakeven, ownership, role, goal-kicking, and return timeline remain unavailable. |
+| player_scoring_component_history | partial | Confirmed score, minutes, price-derived volatility, floor, ceiling, and PPM; base-stat components are unavailable from confirmed sources. |
+| team_list_role_certainty | partial | Confirmed squad selection order and recent minutes for league rosters; global NRL team lists, role threats, and late omission probabilities remain unavailable. |
+| fixture_matchup_table | partial | Confirmed official NRL fixture, venue, bye, kickoff timing, home/away, days-rest, travel heuristic, and rolling matchup difficulty via draw and ladder pages; position-specific weakness and confirmed major outs remain unavailable. |
+| team_performance_context | partial | Confirmed official NRL scores, ladder position, streak, form, points differential, and rolling attacking/defensive trends via draw and ladder pages; tries, linebreaks, possession, and edge-split stats remain unavailable. |
+| cash_generation_model | partial | Confirmed starting/current price, recent price movement, projected next price, and cash classification; breakeven trend and peak-cash timing remain unavailable. |
+| your_squad_table | partial | Confirmed acquisition timing, prices, lock state, selection slot, and simple projections; next-3-week value movement and bye utility remain approximate or unavailable. |
+| opponent_behaviour_history | partial | Confirmed full squad history, cumulative change counts, and boost usage by team-round; exact opponent ins/outs are only inferred from snapshots unless exposed for the authenticated team. |
+| league_ownership_movement | unavailable | Ownership percentage and movement were not present in the confirmed source set. |
+| availability_risk_table | partial | Confirmed current active, injury/suspension, and lock indicators from /players-cf; expected return dates remain unavailable. |
+| captaincy_vc_table | unavailable | Captain and vice-captain selections were not present in the confirmed source set. |
+| trade_candidate_comparison_table | unavailable | Trade comparison scenarios are not available from confirmed sources and were not fabricated. |
+| structure_health_table | partial | Confirmed structural metrics from squad composition and lock state; fixture-linked bye and schedule context are now available for downstream joins. |
+| scenario_table | partial | Confirmed competition refresh trigger from /settings lockout window; official NRL draw now supplies per-round matchup refresh context. |
+| long_horizon_planning_table | partial | Confirmed long-horizon summary uses current squad value, trades, boosts, and bye rounds; deeper future projection fields remain partial. |
+
+## Strategy reference
 # NRL SuperCoach Classic Strategy Playbook for a Custom GPT
 
 ## Purpose
