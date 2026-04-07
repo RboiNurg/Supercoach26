@@ -5,203 +5,116 @@ output: html_document
 
 ## Purpose
 
-This Rmd pulls authenticated SuperCoach league data, stores historical snapshots safely across reruns, rebuilds the latest known team state, and calculates round-by-round cash balances.
+This Rmd pulls authenticated SuperCoach league data, stores historical snapshots safely across reruns, rebuilds the latest known team state, preserves the verified cash-per-round logic, and emits checklist-oriented lookup tables using only confirmed production sources.
 
 ## Outputs
 
 This script writes the following `.rds` files under the league-specific data folder:
 
 - `ladder_history.rds`
+- `fixtures_history.rds`
+- `fixture_triggers.rds`
 - `team_players_snapshots.rds`
 - `team_players_latest.rds`
 - `team_round_signatures.rds`
+- `team_round_stats_history.rds`
+- `actual_trade_history.rds`
 - `inferred_changes.rds`
 - `run_log.rds`
 - `player_price_history_2026.rds`
 - `players_cf_2026.rds`
 - `player_id_lookup.rds`
 - `player_price_history_sc.rds`
-
-## Notes on reruns, table grain and querying
-
-### Core design
-
-This script is designed to be rerun throughout the season, including multiple times within the same live round.
-
-It uses an append-history pattern for some tables and a latest-state pattern for others.
-
-The key distinction is:
-
-- history tables preserve reruns and should be queried with `run_ts` awareness
-- latest tables collapse history down to the most recent known state at the relevant grain
-
-### Table grain and intended use
-
-#### `ladder_history`
-This is a history table.
-
-Grain:
-- one row per `user_team_id`, `round`, `run_ts`
-
-Behaviour:
-- appends on every rerun for the pulled rounds
-- duplicate `user_team_id + round` combinations across reruns are expected
-- this is not corruption; it is how rerun history is preserved
-
-Use this table when you want:
-- ladder snapshot history
-- to compare how ladder fields changed across reruns
-- to inspect what was known at a given run timestamp
-
-Do not query this table directly if you want one current row per team per round.
-
-For latest-only ladder queries, first collapse to the most recent `run_ts` per `user_team_id + round`.
-
-#### `team_players_snapshots`
-This is a snapshot history table.
-
-Grain:
-- one row per player within a stored team-round snapshot, identified by `run_ts`
-
-Behaviour:
-- only appends when a team-round roster signature changed
-- repeated reruns with no roster change do not append duplicate snapshots
-- preserves roster state history for changed team-rounds over time
-
-Use this table when you want:
-- roster history
-- to inspect how a team changed during a live round
-- to reconstruct prior membership for inferred changes
-
-#### `team_round_signatures`
-This is the team-round snapshot index.
-
-Grain:
-- one row per stored team-round snapshot
-
-Behaviour:
-- one row per `user_team_id + round + run_ts` when a new signature is detected
-- used to determine whether a rerun produced a genuinely new roster state
-
-Use this table when you want:
-- a compact history of detected roster states
-- the latest available snapshot timestamp for each team-round
-
-#### `team_players_latest`
-This is the latest-state roster table.
-
-Grain:
-- one row per player for the latest known snapshot of each `user_team_id + round`
-
-Behaviour:
-- rebuilt from snapshot history after each run
-- already deduplicated to the latest `run_ts` per `user_team_id + round`
-
-Use this table when you want:
-- current known roster state by round
-- round-to-round roster comparisons
-- downstream joins that should not duplicate across reruns
-
-#### `inferred_changes`
-This is a change-history table.
-
-Grain:
-- one row per detected roster-state change for a `user_team_id + round`
-
-Behaviour:
-- appends only when a new snapshot differs from the previous stored snapshot
-- compares prior stored membership to current stored membership
-- reflects observed net state changes between snapshots, not every transient move a coach may have made and reversed between runs
-
-Use this table when you want:
-- inferred ins and outs between observed snapshots
-- live-round monitoring of opponent net changes
-
-#### `cash_by_round`
-This is a latest-state team-round table.
-
-Grain:
-- one row per `user_team_id + round`
-
-Behaviour:
-- rebuilt from `team_players_latest`
-- does not preserve rerun history itself
-- intended for one current cash/value result per team-round
-
-Use this table when you want:
-- current reconstructed cash by round
-- team-round value outputs without rerun duplication
-
-### Querying rules
-
-#### When to use history tables
-Use `ladder_history`, `team_players_snapshots`, `team_round_signatures`, and `inferred_changes` when you care about:
-- rerun history
-- intra-round monitoring
-- auditability
-- comparing what changed between runs
-
-#### When to use latest-state tables
-Use `team_players_latest`, `cash_by_round`, and a latest-collapsed ladder view when you want:
-- one current row per business key
-- outputs for reporting
-- joins that should not multiply because of reruns
-
+- `master_player_round_latest.rds`
+- `opponent_behaviour_history.rds`
+- `squad_round_enriched.rds`
+- `game_rules_round_state.rds`
+- `player_scoring_component_history.rds`
+- `team_list_role_certainty.rds`
+- `fixture_matchup_table.rds`
+- `team_performance_context.rds`
+- `cash_generation_model.rds`
+- `league_ownership_movement.rds`
+- `availability_risk_table.rds`
+- `captaincy_vc_table.rds`
+- `structure_health_table.rds`
+- `scenario_refresh_table.rds`
+- `long_horizon_planning_table.rds`
+- `checklist_coverage_status.rds`
 
 ## 1. Setup
 
 ```{r}
 suppressPackageStartupMessages({
-  rm(list = ls())
-  gc()
-  library(pai)
-  load_pacakges()
-  load_pacakges_fap()
+  library(jsonlite)
+  library(dplyr)
+  library(tibble)
+  library(purrr)
+  library(tidyr)
+  library(stringr)
+  library(knitr)
 })
-
-library(ggrepel)
-library(httr2)
-library(jsonlite)
-library(dplyr)
-library(tibble)
-library(purrr)
-library(tidyr)
-library(furrr)
-library(stringr)
-
-source("functions.R")
 ```
 
 ## 2. Configuration
 
 ```{r}
-league_id <- 21064
+league_id <- 21064L
 season_rounds <- 1:27
 base_url <- "https://www.supercoach.com.au/2026/api/nrl/classic/v1"
 run_ts <- Sys.time()
+season_year <- 2026L
 
-Sys.setenv(
-  SC_BEARER = "6a21e2da868f50ebb0fe96dff87b4a02b191fbe9"
-)
+if (!nzchar(Sys.getenv("SC_BEARER"))) {
+  stop("SC_BEARER must be set in the environment before rendering this Rmd")
+}
 
 data_dir <- file.path("data", paste0("supercoach_league_", league_id))
 dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
 
 path_ladder_history <- file.path(data_dir, "ladder_history.rds")
+path_fixtures_history <- file.path(data_dir, "fixtures_history.rds")
+path_fixture_triggers <- file.path(data_dir, "fixture_triggers.rds")
 path_team_players_snapshots <- file.path(data_dir, "team_players_snapshots.rds")
 path_team_players_latest <- file.path(data_dir, "team_players_latest.rds")
 path_team_round_signatures <- file.path(data_dir, "team_round_signatures.rds")
+path_team_round_stats_history <- file.path(data_dir, "team_round_stats_history.rds")
+path_actual_trade_history <- file.path(data_dir, "actual_trade_history.rds")
 path_inferred_changes <- file.path(data_dir, "inferred_changes.rds")
 path_run_log <- file.path(data_dir, "run_log.rds")
 path_player_price_history_2026 <- file.path(data_dir, "player_price_history_2026.rds")
 path_players_cf_2026 <- file.path(data_dir, "players_cf_2026.rds")
 path_player_id_lookup <- file.path(data_dir, "player_id_lookup.rds")
 path_player_price_history_sc <- file.path(data_dir, "player_price_history_sc.rds")
+path_master_player_round_latest <- file.path(data_dir, "master_player_round_latest.rds")
+path_opponent_behaviour_history <- file.path(data_dir, "opponent_behaviour_history.rds")
+path_squad_round_enriched <- file.path(data_dir, "squad_round_enriched.rds")
+path_game_rules_round_state <- file.path(data_dir, "game_rules_round_state.rds")
+path_player_scoring_component_history <- file.path(data_dir, "player_scoring_component_history.rds")
+path_team_list_role_certainty <- file.path(data_dir, "team_list_role_certainty.rds")
+path_fixture_matchup_table <- file.path(data_dir, "fixture_matchup_table.rds")
+path_team_performance_context <- file.path(data_dir, "team_performance_context.rds")
+path_cash_generation_model <- file.path(data_dir, "cash_generation_model.rds")
+path_league_ownership_movement <- file.path(data_dir, "league_ownership_movement.rds")
+path_availability_risk_table <- file.path(data_dir, "availability_risk_table.rds")
+path_captaincy_vc_table <- file.path(data_dir, "captaincy_vc_table.rds")
+path_structure_health_table <- file.path(data_dir, "structure_health_table.rds")
+path_scenario_refresh_table <- file.path(data_dir, "scenario_refresh_table.rds")
+path_long_horizon_planning_table <- file.path(data_dir, "long_horizon_planning_table.rds")
+path_checklist_coverage_status <- file.path(data_dir, "checklist_coverage_status.rds")
 ```
 
 ## 3. Helper functions
 
 ```{r}
+`%||%` <- function(a, b) {
+  if (is.null(a) || length(a) == 0) b else a
+}
+
+read_rds_if_exists <- function(path, default) {
+  if (file.exists(path)) readRDS(path) else default
+}
+
 normalise_player_name <- function(x) {
   x %>%
     stringr::str_to_lower() %>%
@@ -212,173 +125,152 @@ normalise_player_name <- function(x) {
     stringr::str_replace_all(" ", "")
 }
 
-`%||%` <- function(a, b) if (is.null(a)) b else a
-
-read_rds_if_exists <- function(path, default) {
-  if (file.exists(path)) readRDS(path) else default
-}
-
 coalesce_chr <- function(x) {
   x <- as.character(x)
   x[is.na(x)] <- ""
   x
 }
 
-sc_get <- function(path, query = list()) {
-  request(paste0(base_url, path)) %>%
-    req_headers(
-      Accept = "application/json",
-      Authorization = paste("Bearer", Sys.getenv("SC_BEARER")),
-      Referer = paste0(
-        "https://www.supercoach.com.au/nrl/classic/leagues(popup:leagues/",
-        league_id,
-        "/head-2-head)"
-      ),
-      Origin = "https://www.supercoach.com.au",
-      `User-Agent` = "Mozilla/5.0"
-    ) %>%
-    req_url_query(!!!query) %>%
-    req_perform() %>%
-    resp_body_string()
+safe_chr <- function(x, default = NA_character_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  as.character(x[[1]])
 }
 
-pluck_chr1 <- function(x, ...) {
-  out <- purrr::pluck(x, ..., .default = NA_character_)
-  if (length(out) == 0 || is.null(out)) NA_character_ else as.character(out[[1]])
+safe_int <- function(x, default = NA_integer_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  suppressWarnings(as.integer(x[[1]]))
 }
 
-pluck_num1 <- function(x, ...) {
-  out <- purrr::pluck(x, ..., .default = NA_real_)
-  if (length(out) == 0 || is.null(out)) NA_real_ else as.numeric(out[[1]])
+safe_dbl <- function(x, default = NA_real_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  suppressWarnings(as.numeric(x[[1]]))
 }
 
-get_ladder_fixtures_round <- function(round) {
-  txt <- sc_get(
-    paste0("/leagues/", league_id, "/ladderAndFixtures"),
-    query = list(round = round)
+safe_lgl <- function(x, default = NA) {
+  if (is.null(x) || length(x) == 0) return(default)
+  as.logical(x[[1]])
+}
+
+list_to_chr <- function(x) {
+  if (length(x) == 0) return(NA_character_)
+  paste(as.character(unlist(x)), collapse = ", ")
+}
+
+build_url <- function(base, query = list()) {
+  query <- query[!vapply(query, is.null, logical(1))]
+  if (length(query) == 0) {
+    return(base)
+  }
+
+  encoded <- purrr::imap_chr(
+    query,
+    ~ paste0(
+      utils::URLencode(.y, reserved = TRUE),
+      "=",
+      utils::URLencode(as.character(.x), reserved = TRUE)
+    )
   )
 
-  x <- fromJSON(txt, simplifyVector = FALSE)
+  paste0(base, "?", paste(encoded, collapse = "&"))
+}
 
-  ladder_tbl <- if (is.null(x$ladder) || length(x$ladder) == 0) {
+sc_headers <- function() {
+  c(
+    Accept = "application/json",
+    Authorization = paste("Bearer", Sys.getenv("SC_BEARER")),
+    Referer = paste0(
+      "https://www.supercoach.com.au/nrl/classic/leagues(popup:leagues/",
+      league_id,
+      "/head-2-head)"
+    ),
+    Origin = "https://www.supercoach.com.au",
+    "User-Agent" = "Mozilla/5.0"
+  )
+}
+
+stats_headers <- function() {
+  c("User-Agent" = "Mozilla/5.0")
+}
+
+http_get_text <- function(url, headers = character()) {
+  con <- base::url(url, headers = headers)
+  on.exit(try(close(con), silent = TRUE), add = TRUE)
+  paste(readLines(con, warn = FALSE), collapse = "\n")
+}
+
+sc_get_json <- function(path, query = list()) {
+  url <- build_url(paste0(base_url, path), query)
+  txt <- http_get_text(url, sc_headers())
+  jsonlite::fromJSON(txt, simplifyVector = FALSE)
+}
+
+stats_get_json <- function(url, query = list()) {
+  full_url <- build_url(url, query)
+  txt <- http_get_text(full_url, stats_headers())
+  jsonlite::fromJSON(txt, simplifyVector = FALSE)
+}
+
+bind_rows_safe <- function(x) {
+  if (is.null(x) || length(x) == 0) {
     tibble()
   } else {
-    map_dfr(x$ladder, function(z) {
-      tibble(
-        run_ts = run_ts,
-        league_id = z$league_id %||% league_id,
-        round = z$round %||% round,
-        user_team_id = as.integer(z$user_team_id %||% NA_integer_),
-        team_name = pluck_chr1(z, "userTeam", "teamname"),
-        coach_name = pluck_chr1(z, "userTeam", "user", "first_name"),
-        is_me = purrr::pluck(z, "userTeam", "user", "is_me", .default = NA),
-        wins = z$wins %||% NA_real_,
-        losses = z$losses %||% NA_real_,
-        draws = z$draws %||% NA_real_,
-        ladder_points = z$points %||% NA_real_,
-        points_for = z$points_for %||% NA_real_,
-        points_against = z$points_against %||% NA_real_,
-        position = z$position %||% NA_real_,
-        last_position = z$last_position %||% NA_real_,
-        wins_last5 = z$wins_last5 %||% NA_real_,
-        losses_last5 = z$losses_last5 %||% NA_real_,
-        draws_last5 = z$draws_last5 %||% NA_real_,
-        round_points = pluck_num1(z, "userTeam", "stats", 1, "points"),
-        total_points = pluck_num1(z, "userTeam", "stats", 1, "total_points"),
-        overall_position = pluck_num1(z, "userTeam", "stats", 1, "position"),
-        round_position = pluck_num1(z, "userTeam", "stats", 1, "round_position"),
-        squad_value = pluck_num1(z, "userTeam", "stats", 1, "price"),
-        price_change = pluck_num1(z, "userTeam", "stats", 1, "price_change"),
-        total_price_change = pluck_num1(z, "userTeam", "stats", 1, "total_price_change"),
-        rounds_played = pluck_num1(z, "userTeam", "stats", 1, "rounds_played")
-      )
-    })
+    bind_rows(x)
   }
-
-  fixtures_tbl <- if (is.null(x$fixtures) || length(x$fixtures) == 0) {
-    tibble()
-  } else {
-    tibble(
-      run_ts = run_ts,
-      league_id = league_id,
-      round = round,
-      raw = I(list(x$fixtures))
-    )
-  }
-
-  list(
-    ladder = ladder_tbl,
-    fixtures = fixtures_tbl,
-    raw_json = txt
-  )
 }
 
-get_stats_players_round <- function(team_id, round) {
-  txt <- sc_get(
-    paste0("/userteams/", team_id, "/statsPlayers"),
-    query = list(round = round)
-  )
-
-  x <- fromJSON(txt, simplifyVector = FALSE)
-  top_name <- intersect(names(x), c("players", "statsPlayers", "data"))
-
-  players_tbl <- if (length(top_name) == 0 || is.null(x[[top_name[1]]]) || length(x[[top_name[1]]]) == 0) {
-    tibble(
-      run_ts = run_ts,
-      user_team_id = as.integer(team_id),
-      round = as.integer(round)
-    )
-  } else {
-    bind_rows(x[[top_name[1]]]) %>%
-      as_tibble() %>%
-      mutate(
-        run_ts = run_ts,
-        user_team_id = as.integer(team_id),
-        round = as.integer(round)
-      )
+parallel_map <- function(x, f, mc.cores = max(1L, min(6L, parallel::detectCores() - 1L))) {
+  if (length(x) <= 1 || .Platform$OS.type == "windows" || mc.cores <= 1) {
+    return(lapply(x, f))
   }
-
-  list(
-    players = players_tbl,
-    raw_json = txt
-  )
+  parallel::mclapply(x, f, mc.cores = mc.cores)
 }
 
-detect_current_round <- function(rounds = season_rounds) {
-  seed_ladder <- tryCatch(
-    get_ladder_fixtures_round(1)$ladder,
-    error = function(e) tibble()
-  )
-
-  seed_team_id <- seed_ladder %>%
-    filter(!is.na(user_team_id)) %>%
-    distinct(user_team_id) %>%
-    pull(user_team_id) %>%
-    first()
-
-  if (length(seed_team_id) == 0 || is.na(seed_team_id)) {
-    stop("Could not find a valid seed team ID from round 1 ladder")
-  }
-
-  for (r in rev(rounds)) {
-    player_tbl <- tryCatch(
-      {
-        out <- get_stats_players_round(seed_team_id, r)$players
-        if (!is.data.frame(out)) tibble() else out
-      },
-      error = function(e) tibble()
-    )
-
-    if (
-      nrow(player_tbl) > 0 &&
-      "round" %in% names(player_tbl) &&
-      any(player_tbl$round == r, na.rm = TRUE)
-    ) {
-      return(as.integer(r))
+roll_mean_right <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) < k) return(out)
+  for (i in seq.int(k, length(x))) {
+    window <- x[(i - k + 1):i]
+    if (all(!is.na(window))) {
+      out[i] <- mean(window)
     }
   }
+  out
+}
 
-  stop("Could not detect current round from statsPlayers")
+roll_sd_right <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) < k) return(out)
+  for (i in seq.int(k, length(x))) {
+    window <- x[(i - k + 1):i]
+    if (sum(!is.na(window)) >= 2) {
+      out[i] <- stats::sd(window, na.rm = TRUE)
+    }
+  }
+  out
+}
+
+roll_min_right <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) < k) return(out)
+  for (i in seq.int(k, length(x))) {
+    window <- x[(i - k + 1):i]
+    if (all(!is.na(window))) {
+      out[i] <- min(window)
+    }
+  }
+  out
+}
+
+roll_max_right <- function(x, k) {
+  out <- rep(NA_real_, length(x))
+  if (length(x) < k) return(out)
+  for (i in seq.int(k, length(x))) {
+    window <- x[(i - k + 1):i]
+    if (all(!is.na(window))) {
+      out[i] <- max(window)
+    }
+  }
+  out
 }
 
 build_roster_signature <- function(df) {
@@ -423,7 +315,221 @@ pair_inferred_trades <- function(players_out, players_in) {
   )
 }
 
+get_settings <- function() {
+  sc_get_json("/settings")
+}
 
+get_me <- function() {
+  sc_get_json("/me")
+}
+
+get_teams <- function() {
+  sc_get_json("/teams")
+}
+
+get_ladder_fixtures_round <- function(round_value) {
+  x <- sc_get_json(
+    paste0("/leagues/", league_id, "/ladderAndFixtures"),
+    query = list(round = round_value)
+  )
+
+  ladder_tbl <- purrr::map_dfr(x$ladder %||% list(), function(z) {
+    tibble(
+      run_ts = run_ts,
+      league_id = safe_int(z$league_id, league_id),
+      round = safe_int(z$round, round_value),
+      user_team_id = safe_int(z$user_team_id),
+      team_name = safe_chr(z$userTeam$teamname),
+      coach_name = safe_chr(z$userTeam$user$first_name),
+      is_me = safe_lgl(z$userTeam$user$is_me, FALSE),
+      wins = safe_dbl(z$wins),
+      losses = safe_dbl(z$losses),
+      draws = safe_dbl(z$draws),
+      ladder_points = safe_dbl(z$points),
+      points_for = safe_dbl(z$points_for),
+      points_against = safe_dbl(z$points_against),
+      position = safe_dbl(z$position),
+      last_position = safe_dbl(z$last_position),
+      wins_last5 = safe_dbl(z$wins_last5),
+      losses_last5 = safe_dbl(z$losses_last5),
+      draws_last5 = safe_dbl(z$draws_last5),
+      round_points = safe_dbl(z$userTeam$stats[[1]]$points),
+      total_points = safe_dbl(z$userTeam$stats[[1]]$total_points),
+      overall_position = safe_dbl(z$userTeam$stats[[1]]$position),
+      round_position = safe_dbl(z$userTeam$stats[[1]]$round_position),
+      squad_value = safe_dbl(z$userTeam$stats[[1]]$price),
+      price_change = safe_dbl(z$userTeam$stats[[1]]$price_change),
+      total_price_change = safe_dbl(z$userTeam$stats[[1]]$total_price_change),
+      rounds_played = safe_dbl(z$userTeam$stats[[1]]$rounds_played)
+    )
+  })
+
+  fixtures_tbl <- purrr::map_dfr(x$fixtures %||% list(), function(z) {
+    tibble(
+      run_ts = run_ts,
+      league_id = league_id,
+      round = safe_int(z$round, round_value),
+      fixture = safe_int(z$fixture),
+      fixture_id = paste0("league_", safe_int(z$round, round_value), "_", safe_int(z$fixture)),
+      user_team1_id = safe_int(z$user_team1$id),
+      user_team1_name = safe_chr(z$user_team1$teamname),
+      user_team1_coach = safe_chr(z$user_team1$user$first_name),
+      user_team1_points = safe_dbl(z$user_team1$stats[[1]]$points),
+      user_team2_id = safe_int(z$user_team2$id),
+      user_team2_name = safe_chr(z$user_team2$teamname),
+      user_team2_coach = safe_chr(z$user_team2$user$first_name),
+      user_team2_points = safe_dbl(z$user_team2$stats[[1]]$points)
+    )
+  })
+
+  list(ladder = ladder_tbl, fixtures = fixtures_tbl)
+}
+
+get_stats_players_round <- function(team_id, round_value) {
+  x <- sc_get_json(
+    paste0("/userteams/", team_id, "/statsPlayers"),
+    query = list(round = round_value)
+  )
+
+  players_tbl <- purrr::map_dfr(x$players %||% list(), function(z) {
+    tibble(
+      run_ts = run_ts,
+      user_team_id = safe_int(z$user_team_id, team_id),
+      round = safe_int(z$round, round_value),
+      player_id = safe_int(z$player_id),
+      picked = safe_lgl(z$picked, FALSE),
+      position = safe_chr(z$position),
+      updated = safe_chr(z$updated),
+      position_long = safe_chr(z$position_long),
+      position_sort = safe_int(z$position_sort)
+    )
+  })
+
+  stats_tbl <- purrr::map_dfr(x$stats %||% list(), function(z) {
+    tibble(
+      run_ts = run_ts,
+      user_team_id = safe_int(z$user_team_id, team_id),
+      round = safe_int(z$round, round_value),
+      salarycap = safe_dbl(z$salarycap),
+      points = safe_dbl(z$points),
+      total_points = safe_dbl(z$total_points),
+      position = safe_dbl(z$position),
+      last_position = safe_dbl(z$last_position),
+      round_position = safe_dbl(z$round_position),
+      price = safe_dbl(z$price),
+      price_change = safe_dbl(z$price_change),
+      total_price_change = safe_dbl(z$total_price_change),
+      rounds_played = safe_dbl(z$rounds_played),
+      changes = safe_int(z$changes),
+      total_changes = safe_int(z$total_changes),
+      trade_boosts_used = safe_int(z$trade_boosts_used),
+      last_trade_boosts_used = safe_int(z$last_trade_boosts_used),
+      league_wins = safe_int(z$league_wins),
+      league_draws = safe_int(z$league_draws),
+      league_losses = safe_int(z$league_losses)
+    )
+  })
+
+  trades_tbl <- purrr::map_dfr(x$trades %||% list(), function(z) {
+    tibble(
+      run_ts = run_ts,
+      round = safe_int(z$round, round_value),
+      user_team_id = safe_int(z$user_id, team_id),
+      buy_player_id = safe_int(z$buy_player_id),
+      sell_player_id = safe_int(z$sell_player_id),
+      trade_source = "actual_api"
+    )
+  })
+
+  list(players = players_tbl, stats = stats_tbl, trades = trades_tbl)
+}
+
+extract_initialvalue_catalog <- function(year = season_year) {
+  x <- stats_get_json(
+    "https://www.nrlsupercoachstats.com/initialvalue.php",
+    query = list(
+      year = year,
+      grid_id = "list1",
+      jqgrid_page = 1,
+      rows = 2000,
+      search = "false"
+    )
+  )
+
+  rows <- bind_rows(x$rows %||% list())
+  rows %>%
+    transmute(
+      player_name = Name %>%
+        gsub("^.*?>", "", .) %>%
+        gsub("</a>$", "", .),
+      team_abbrev = Team,
+      posn1 = Posn1,
+      posn2 = ifelse(Posn2 == "", NA_character_, Posn2),
+      positions = ifelse(is.na(posn2), posn1, paste(posn1, posn2, sep = "/")),
+      current_price_external = suppressWarnings(as.numeric(Price)),
+      avg_score_external = suppressWarnings(as.numeric(AvgScore)),
+      projected_price_next = suppressWarnings(as.numeric(ProjectedPrice))
+    ) %>%
+    distinct(player_name, .keep_all = TRUE) %>%
+    arrange(player_name)
+}
+
+get_yearplot_player <- function(player_name, year = season_year) {
+  stats_get_json(
+    "https://www.nrlsupercoachstats.com/highcharts/data-yearplot.php",
+    query = list(dropdown1 = player_name, YEAR = year)
+  )
+}
+
+yearplot_to_tibble_year <- function(x, player_name, year = season_year) {
+  if (length(x) == 0) {
+    return(tibble(
+      player_name = character(),
+      year = integer(),
+      round = integer(),
+      score = numeric(),
+      mins = numeric(),
+      price = numeric()
+    ))
+  }
+
+  rounds <- suppressWarnings(as.integer(unlist(x[[1]]$data)))
+  out <- tibble(player_name = player_name, year = year, round = rounds)
+
+  for (i in seq_along(x)[-1]) {
+    nm <- safe_chr(x[[i]]$name, "")
+    vals <- suppressWarnings(as.numeric(unlist(x[[i]]$data)))
+
+    if (identical(nm, paste0(year, "Score"))) out$score <- vals
+    if (identical(nm, paste0(year, "Mins"))) out$mins <- vals
+    if (identical(nm, paste0(year, "Price"))) out$price <- vals
+  }
+
+  out
+}
+
+safe_get_price_history <- function(player_name, year = season_year) {
+  tryCatch(
+    {
+      get_yearplot_player(player_name, year) %>%
+        yearplot_to_tibble_year(player_name = player_name, year = year)
+    },
+    error = function(e) {
+      tibble(
+        player_name = player_name,
+        year = year,
+        round = integer(),
+        score = numeric(),
+        mins = numeric(),
+        price = numeric()
+      )
+    }
+  )
+}
+
+print_results <- function(x, n = 10) {
+  print(utils::head(as.data.frame(x), n = n), row.names = FALSE)
+}
 ```
 
 ## 4. Empty table templates
@@ -433,42 +539,25 @@ empty_ladder_history <- tibble(
   run_ts = as.POSIXct(character()),
   league_id = integer(),
   round = integer(),
-  user_team_id = integer(),
-  team_name = character(),
-  coach_name = character(),
-  is_me = logical(),
-  wins = numeric(),
-  losses = numeric(),
-  draws = numeric(),
-  ladder_points = numeric(),
-  points_for = numeric(),
-  points_against = numeric(),
-  position = numeric(),
-  last_position = numeric(),
-  wins_last5 = numeric(),
-  losses_last5 = numeric(),
-  draws_last5 = numeric(),
-  round_points = numeric(),
-  total_points = numeric(),
-  overall_position = numeric(),
-  round_position = numeric(),
-  squad_value = numeric(),
-  price_change = numeric(),
-  total_price_change = numeric(),
-  rounds_played = numeric()
+  user_team_id = integer()
+)
+
+empty_fixtures_history <- tibble(
+  run_ts = as.POSIXct(character()),
+  league_id = integer(),
+  round = integer(),
+  fixture = integer(),
+  fixture_id = character()
 )
 
 empty_team_players_snapshots <- tibble(
   run_ts = as.POSIXct(character()),
   user_team_id = integer(),
-  round = integer()
+  round = integer(),
+  player_id = integer()
 )
 
-empty_team_players_latest <- tibble(
-  run_ts = as.POSIXct(character()),
-  user_team_id = integer(),
-  round = integer()
-)
+empty_team_players_latest <- empty_team_players_snapshots
 
 empty_team_round_signatures <- tibble(
   run_ts = as.POSIXct(character()),
@@ -476,6 +565,23 @@ empty_team_round_signatures <- tibble(
   user_team_id = integer(),
   round = integer(),
   roster_signature = character()
+)
+
+empty_team_round_stats_history <- tibble(
+  run_ts = as.POSIXct(character()),
+  user_team_id = integer(),
+  round = integer(),
+  total_changes = integer(),
+  trade_boosts_used = integer()
+)
+
+empty_actual_trade_history <- tibble(
+  run_ts = as.POSIXct(character()),
+  round = integer(),
+  user_team_id = integer(),
+  buy_player_id = integer(),
+  sell_player_id = integer(),
+  trade_source = character()
 )
 
 empty_inferred_changes <- tibble(
@@ -503,72 +609,153 @@ empty_run_log <- tibble(
   changed_team_rounds = integer(),
   failed_team_rounds = integer()
 )
+
+empty_player_price_history_2026 <- tibble(
+  player_name = character(),
+  year = integer(),
+  round = integer(),
+  score = numeric(),
+  mins = numeric(),
+  price = numeric()
+)
 ```
 
 ## 5. Load existing history
 
 ```{r}
 ladder_history_existing <- read_rds_if_exists(path_ladder_history, empty_ladder_history)
+fixtures_history_existing <- read_rds_if_exists(path_fixtures_history, empty_fixtures_history)
 team_players_snapshots_existing <- read_rds_if_exists(path_team_players_snapshots, empty_team_players_snapshots)
 team_players_latest_existing <- read_rds_if_exists(path_team_players_latest, empty_team_players_latest)
 team_round_signatures_existing <- read_rds_if_exists(path_team_round_signatures, empty_team_round_signatures)
+team_round_stats_history_existing <- read_rds_if_exists(path_team_round_stats_history, empty_team_round_stats_history)
+actual_trade_history_existing <- read_rds_if_exists(path_actual_trade_history, empty_actual_trade_history)
 inferred_changes_existing <- read_rds_if_exists(path_inferred_changes, empty_inferred_changes)
 run_log_existing <- read_rds_if_exists(path_run_log, empty_run_log)
+player_price_history_existing <- read_rds_if_exists(path_player_price_history_2026, empty_player_price_history_2026)
 ```
 
-## 6. Detect current round
+## 6. Reference data and round state
 
 ```{r}
-first_run <- nrow(ladder_history_existing) == 0 || nrow(team_round_signatures_existing) == 0
-current_round <- detect_current_round(season_rounds)
-```
+settings <- get_settings()
+me_profile <- get_me()
+teams_reference <- bind_rows_safe(get_teams()) %>%
+  transmute(
+    team_id = as.integer(id),
+    team_abbrev = as.character(abbrev),
+    team_feed_name = as.character(feed_name),
+    team_name = as.character(name)
+  )
 
-## 7. Pull ladder and team-round data
+current_round <- safe_int(settings$competition$current_round)
+next_round <- safe_int(settings$competition$next_round)
+competition_status <- safe_chr(settings$competition$status)
 
-```{r}
-rounds_to_pull <- if (first_run) {
-  seq_len(current_round)
-} else {
-  current_round
+if (is.na(current_round)) {
+  stop("Could not detect current round from /settings")
 }
 
-# Pull ladder data for the required rounds.
-ladder_pulls <- map(rounds_to_pull, get_ladder_fixtures_round)
-ladder_history_new <- map_dfr(ladder_pulls, "ladder")
+first_run <- nrow(ladder_history_existing) == 0 || nrow(team_round_signatures_existing) == 0
+```
 
-ladder_history <- bind_rows(
-  ladder_history_existing,
-  ladder_history_new
-) %>%
+## 7. Pull ladder, fixtures, team-round rosters and stats
+
+```{r}
+rounds_to_pull <- if (first_run) seq_len(current_round) else current_round
+
+ladder_pulls <- map(rounds_to_pull, get_ladder_fixtures_round)
+
+ladder_history_new <- map_dfr(ladder_pulls, "ladder")
+fixtures_history_new <- map_dfr(ladder_pulls, "fixtures")
+
+ladder_history <- bind_rows(ladder_history_existing, ladder_history_new) %>%
   arrange(run_ts, round, position, user_team_id)
+
+fixtures_history <- bind_rows(fixtures_history_existing, fixtures_history_new) %>%
+  distinct(run_ts, fixture_id, .keep_all = TRUE) %>%
+  arrange(run_ts, round, fixture)
 
 team_lookup <- ladder_history %>%
   distinct(user_team_id, team_name, coach_name, is_me) %>%
   filter(!is.na(user_team_id))
+
+grog_baguettes_team_id <- team_lookup %>%
+  filter(is_me %in% TRUE) %>%
+  distinct(user_team_id) %>%
+  pull(user_team_id) %>%
+  first()
 
 team_round_grid <- ladder_history_new %>%
   distinct(user_team_id, round) %>%
   filter(!is.na(user_team_id), !is.na(round)) %>%
   arrange(round, user_team_id)
 
-future::plan(multisession, workers = max(1, future::availableCores() - 1))
+grid_records <- split(team_round_grid, seq_len(nrow(team_round_grid)))
 
-# Pull team player lists for each team-round in the new ladder pull.
-team_players_pull <- team_round_grid %>%
-  mutate(
-    pull = future_pmap(
-      list(user_team_id, round),
-      ~ tryCatch(
-        get_stats_players_round(..1, ..2),
-        error = function(e) list(players = tibble(), raw_json = NA_character_, error = conditionMessage(e))
-      ),
-      .options = furrr_options(seed = TRUE)
-    ),
-    players = map(pull, "players"),
-    pull_error = map_chr(pull, ~ .x$error %||% NA_character_),
-    pull_ok = map_lgl(pull, ~ is.null(.x$error)),
-    player_rows = map_int(players, nrow)
-  )
+team_pull_list <- parallel_map(
+  grid_records,
+  function(row_df) {
+    team_id <- row_df$user_team_id[[1]]
+    round_value <- row_df$round[[1]]
+
+    tryCatch(
+      get_stats_players_round(team_id, round_value),
+      error = function(e) {
+        list(
+          players = tibble(),
+          stats = tibble(),
+          trades = tibble(),
+          error = conditionMessage(e)
+        )
+      }
+    )
+  }
+)
+
+team_players_pull <- if (nrow(team_round_grid) == 0) {
+  team_round_grid %>%
+    mutate(
+      pull = list(),
+      players = list(),
+      stats = list(),
+      trades = list(),
+      pull_error = character(),
+      pull_ok = logical()
+    )
+} else {
+  team_round_grid %>%
+    mutate(
+      pull = team_pull_list,
+      players = map(pull, "players"),
+      stats = map(pull, "stats"),
+      trades = map(pull, "trades"),
+      pull_error = map_chr(pull, ~ .x$error %||% NA_character_),
+      pull_ok = map_lgl(pull, ~ is.null(.x$error))
+    )
+}
+
+team_round_stats_history_new <- team_players_pull %>%
+  select(stats) %>%
+  unnest(stats)
+
+actual_trade_history_new <- team_players_pull %>%
+  select(trades) %>%
+  unnest(trades)
+
+team_round_stats_history <- bind_rows(
+  team_round_stats_history_existing,
+  team_round_stats_history_new
+) %>%
+  distinct(run_ts, user_team_id, round, .keep_all = TRUE) %>%
+  arrange(run_ts, round, user_team_id)
+
+actual_trade_history <- bind_rows(
+  actual_trade_history_existing,
+  actual_trade_history_new
+) %>%
+  distinct(round, user_team_id, buy_player_id, sell_player_id, .keep_all = TRUE) %>%
+  arrange(round, user_team_id, buy_player_id, sell_player_id)
 ```
 
 ## 8. Build snapshot signatures and protect reruns
@@ -580,11 +767,10 @@ latest_existing_signatures <- team_round_signatures_existing %>%
   ungroup() %>%
   select(user_team_id, round, prev_run_ts = run_ts, prev_roster_signature = roster_signature)
 
-# Only compare signatures when the new pull succeeded and contains a roster shape we trust.
 team_round_results <- team_players_pull %>%
   mutate(
-    players_core = map(players, ~ .x %>% select(-any_of("raw_json"))),
-    roster_signature = map_chr(players_core, build_roster_signature)
+    roster_signature = map_chr(players, build_roster_signature),
+    player_rows = map_int(players, nrow)
   ) %>%
   left_join(
     latest_existing_signatures,
@@ -609,16 +795,16 @@ team_round_signatures_new <- team_round_results %>%
     round,
     roster_signature
   )
-```
 
-## 9. Append snapshots and rebuild latest team state
-
-```{r}
 team_players_snapshots_new <- team_round_results %>%
   filter(is_new_snapshot) %>%
-  select(players_core) %>%
-  unnest(players_core)
+  select(players) %>%
+  unnest(players)
+```
 
+## 9. Append snapshots, rebuild latest team state, and infer changes
+
+```{r}
 team_round_signatures <- bind_rows(
   team_round_signatures_existing,
   team_round_signatures_new
@@ -629,7 +815,7 @@ team_players_snapshots <- bind_rows(
   team_players_snapshots_existing,
   team_players_snapshots_new
 ) %>%
-  arrange(run_ts, round, user_team_id)
+  arrange(run_ts, round, user_team_id, position_sort, player_id)
 
 latest_snapshot_per_team_round <- team_round_signatures %>%
   group_by(user_team_id, round) %>%
@@ -645,27 +831,32 @@ team_players_latest <- team_players_snapshots %>%
   filter(run_ts == latest_run_ts) %>%
   select(-latest_run_ts) %>%
   arrange(user_team_id, round, position_sort, position, player_id)
-```
 
-## 10. Infer roster changes between snapshots
-
-```{r}
 previous_membership_lookup <- team_round_signatures_existing %>%
   group_by(user_team_id, round) %>%
   slice_max(run_ts, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
   select(user_team_id, round, prev_run_ts = run_ts)
 
-previous_membership <- previous_membership_lookup %>%
+previous_membership_source <- previous_membership_lookup %>%
   inner_join(
     team_players_snapshots_existing,
     by = c("user_team_id", "round", "prev_run_ts" = "run_ts")
-  ) %>%
-  group_by(user_team_id, round, prev_run_ts) %>%
-  summarise(
-    prev_players = list(extract_roster_membership(pick(everything()))),
-    .groups = "drop"
   )
+
+previous_membership <- if (nrow(previous_membership_source) == 0) {
+  tibble(
+    user_team_id = integer(),
+    round = integer(),
+    prev_run_ts = as.POSIXct(character()),
+    prev_players = list()
+  )
+} else {
+  previous_membership_source %>%
+    group_by(user_team_id, round, prev_run_ts) %>%
+    group_modify(~ tibble(prev_players = list(extract_roster_membership(.x)))) %>%
+    ungroup()
+}
 
 current_membership <- team_round_results %>%
   filter(is_new_snapshot) %>%
@@ -675,7 +866,7 @@ current_membership <- team_round_results %>%
     detected_run_ts = run_ts,
     from_run_ts = prev_run_ts,
     to_run_ts = run_ts,
-    current_players = map(players_core, extract_roster_membership)
+    current_players = map(players, extract_roster_membership)
   )
 
 inferred_changes_new <- current_membership %>%
@@ -711,7 +902,7 @@ inferred_changes <- bind_rows(
   arrange(to_run_ts, round, user_team_id)
 ```
 
-## 11. Save league outputs and run log
+## 10. Save core league outputs
 
 ```{r}
 run_log <- bind_rows(
@@ -730,17 +921,14 @@ run_log <- bind_rows(
 )
 
 saveRDS(ladder_history, path_ladder_history)
+saveRDS(fixtures_history, path_fixtures_history)
 saveRDS(team_players_snapshots, path_team_players_snapshots)
 saveRDS(team_players_latest, path_team_players_latest)
 saveRDS(team_round_signatures, path_team_round_signatures)
+saveRDS(team_round_stats_history, path_team_round_stats_history)
+saveRDS(actual_trade_history, path_actual_trade_history)
 saveRDS(inferred_changes, path_inferred_changes)
 saveRDS(run_log, path_run_log)
-
-grog_baguettes_team_id <- team_lookup %>%
-  filter(is_me %in% TRUE) %>%
-  distinct(user_team_id) %>%
-  pull(user_team_id) %>%
-  first()
 
 grog_baguettes_latest <- team_players_latest %>%
   filter(user_team_id == grog_baguettes_team_id)
@@ -757,193 +945,95 @@ league_change_summary <- inferred_changes %>%
   arrange(desc(to_run_ts), round, team_name)
 ```
 
-## 12. Pull player master data
+## 11. Pull player reference data and external price history
 
 ```{r}
-get_players_cf <- function(embed = NULL, round = NULL) {
-  req <- request(paste0(base_url, "/players-cf")) %>%
-    req_headers(
-      Accept = "application/json",
-      Authorization = paste("Bearer", Sys.getenv("SC_BEARER")),
-      Referer = paste0(
-        "https://www.supercoach.com.au/nrl/classic/leagues(popup:leagues/",
-        league_id,
-        "/head-2-head)"
-      ),
-      Origin = "https://www.supercoach.com.au",
-      `User-Agent` = "Mozilla/5.0"
-    )
+players_cf_list <- sc_get_json("/players-cf")
 
-  query <- list()
+player_catalog <- tibble(
+  player_id = map_int(players_cf_list, ~ safe_int(.x$id)),
+  first_name = map_chr(players_cf_list, ~ safe_chr(.x$first_name)),
+  last_name = map_chr(players_cf_list, ~ safe_chr(.x$last_name)),
+  full_name = paste(last_name, first_name, sep = ", "),
+  name_norm = normalise_player_name(full_name),
+  team_id = map_int(players_cf_list, ~ safe_int(.x$team_id)),
+  team_abbrev = map_chr(players_cf_list, ~ safe_chr(.x$team$abbrev)),
+  team_name = map_chr(players_cf_list, ~ safe_chr(.x$team$name)),
+  locked_flag = map_lgl(players_cf_list, ~ safe_lgl(.x$locked, FALSE)),
+  played_status = map_chr(players_cf_list, ~ safe_chr(.x$played_status$status)),
+  played_status_display = map_chr(players_cf_list, ~ safe_chr(.x$played_status$display)),
+  active_flag = map_lgl(players_cf_list, ~ safe_lgl(.x$active, FALSE)),
+  injury_suspension_status = map_chr(players_cf_list, ~ safe_chr(.x$injury_suspension_status)),
+  injury_suspension_status_text = map_chr(players_cf_list, ~ safe_chr(.x$injury_suspension_status_text))
+)
 
-  if (!is.null(embed)) {
-    query$embed <- embed
-  }
+players_cf_2026 <- player_catalog
+player_id_lookup <- player_catalog %>%
+  select(player_id, full_name, team_abbrev, team_name)
 
-  if (!is.null(round)) {
-    query$round <- round
-  }
+initialvalue_catalog <- extract_initialvalue_catalog(season_year) %>%
+  mutate(name_norm = normalise_player_name(player_name))
 
-  req %>%
-    req_url_query(!!!query) %>%
-    req_perform() %>%
-    resp_body_string() %>%
-    fromJSON(simplifyDataFrame = TRUE) %>%
-    as_tibble()
+existing_players_2026 <- player_price_history_existing %>%
+  filter(year == season_year) %>%
+  distinct(player_name) %>%
+  pull(player_name)
+
+players_to_fetch <- setdiff(initialvalue_catalog$player_name, existing_players_2026)
+
+player_price_history_new <- if (length(players_to_fetch) == 0) {
+  empty_player_price_history_2026
+} else {
+  bind_rows(parallel_map(players_to_fetch, safe_get_price_history))
 }
 
-players_cf_2026 <- get_players_cf()
-
-player_id_lookup <- players_cf_2026 %>%
-  transmute(
-    player_id = as.integer(id),
-    player_name = paste(last_name, first_name, sep = ", ")
-  ) %>%
-  filter(!is.na(player_id), !is.na(player_name), player_name != "") %>%
-  distinct(player_id, player_name) %>%
-  arrange(player_id)
-```
-
-## 13. Pull external player price history
-
-```{r}
-get_initialvalue_players <- function(year = 2026) {
-  request("https://www.nrlsupercoachstats.com/initialvalue.php") %>%
-    req_user_agent("Mozilla/5.0") %>%
-    req_url_query(
-      year = year,
-      grid_id = "list1",
-      jqgrid_page = 1,
-      rows = 2000,
-      search = "false",
-      nd = as.integer(Sys.time())
-    ) %>%
-    req_perform() %>%
-    resp_body_string() %>%
-    fromJSON(simplifyDataFrame = TRUE) %>%
-    {\(.) as_tibble(.$rows)}() %>%
-    transmute(
-      player_name = Name %>%
-        gsub("^.*?>", "", .) %>%
-        gsub("</a>$", "", .)
-    ) %>%
-    distinct(player_name) %>%
-    arrange(player_name)
-}
-
-get_yearplot_player <- function(player, year = 2026) {
-  request("https://www.nrlsupercoachstats.com/highcharts/data-yearplot.php") %>%
-    req_user_agent("Mozilla/5.0") %>%
-    req_url_query(
-      dropdown1 = player,
-      YEAR = year
-    ) %>%
-    req_perform() %>%
-    resp_body_string() %>%
-    fromJSON(simplifyDataFrame = FALSE)
-}
-
-yearplot_to_tibble_year <- function(x, player, year = 2026) {
-  rounds <- as.integer(unlist(x[[1]]$data))
-  target_prefix <- as.character(year)
-
-  out <- tibble(
-    player_name = player,
-    year = year,
-    round = rounds
-  )
-
-  for (i in seq_along(x)[-1]) {
-    nm <- x[[i]]$name %||% ""
-
-    if (startsWith(nm, target_prefix)) {
-      vals <- unlist(x[[i]]$data)
-      clean_nm <- nm %>%
-        str_remove(paste0("^", target_prefix)) %>%
-        str_to_lower()
-
-      out[[clean_nm]] <- vals
-    }
-  }
-
-  out
-}
-
-safe_get_price_history <- function(player, year = 2026) {
-  tryCatch(
-    {
-      get_yearplot_player(player, year) %>%
-        yearplot_to_tibble_year(player = player, year = year)
-    },
-    error = function(e) {
-      tibble(
-        player_name = player,
-        year = year,
-        round = integer(),
-        score = numeric(),
-        mins = numeric(),
-        price = numeric()
-      )
-    }
-  )
-}
-
-year_to_pull <- 2026
-
-player_lookup_2026 <- get_initialvalue_players(year_to_pull)
-
-player_price_history_2026 <- map_dfr(
-  player_lookup_2026$player_name,
-  safe_get_price_history,
-  year = year_to_pull
+player_price_history_2026 <- bind_rows(
+  player_price_history_existing,
+  player_price_history_new
 ) %>%
+  filter(year == season_year) %>%
+  distinct(player_name, year, round, .keep_all = TRUE) %>%
   arrange(player_name, round)
+
+saveRDS(player_price_history_2026, path_player_price_history_2026)
+saveRDS(players_cf_2026, path_players_cf_2026)
+saveRDS(player_id_lookup, path_player_id_lookup)
 ```
 
-## 14. Match external prices back to SuperCoach player ids
+## 12. Crosswalk yearplot histories to SuperCoach player ids
 
 ```{r}
-player_id_lookup_norm <- player_id_lookup %>%
-  mutate(player_name_norm = normalise_player_name(player_name))
-
-player_price_history_2026_norm <- player_price_history_2026 %>%
-  mutate(player_name_norm = normalise_player_name(player_name))
-
-league_player_ids <- team_players_latest %>%
-  distinct(player_id)
-
-player_id_lookup_norm_scoped <- player_id_lookup_norm %>%
-  semi_join(league_player_ids, by = "player_id")
-
-name_map_check <- player_id_lookup_norm_scoped %>%
-  distinct(player_id, player_name_norm) %>%
-  count(player_name_norm, name = "n") %>%
-  filter(n > 1)
-
-if (nrow(name_map_check) > 0) {
-  print_results(name_map_check)
-
-  collision_debug <- player_id_lookup_norm_scoped %>%
-    semi_join(name_map_check, by = "player_name_norm") %>%
-    arrange(player_name_norm, player_id)
-
-  print_results(collision_debug)
-
-  stop("Stopping: multiple in-league player_id values share the same normalised player name")
-}
-
-player_id_lookup_norm_dedup <- player_id_lookup_norm_scoped %>%
-  distinct(player_id, player_name, player_name_norm)
-
-player_price_history_sc <- player_price_history_2026_norm %>%
+player_crosswalk_primary <- initialvalue_catalog %>%
   inner_join(
-    player_id_lookup_norm_dedup %>%
-      select(player_id, player_name_sc = player_name, player_name_norm),
-    by = "player_name_norm"
+    player_catalog %>% select(player_id, full_name, name_norm, team_abbrev),
+    by = c("name_norm", "team_abbrev")
+  ) %>%
+  distinct(player_name, player_id, .keep_all = TRUE)
+
+unmatched_initialvalue <- initialvalue_catalog %>%
+  anti_join(player_crosswalk_primary, by = c("player_name", "team_abbrev", "name_norm"))
+
+player_crosswalk_fallback <- unmatched_initialvalue %>%
+  inner_join(
+    player_catalog %>%
+      count(name_norm, name = "sc_name_matches") %>%
+      filter(sc_name_matches == 1) %>%
+      inner_join(player_catalog %>% select(player_id, full_name, name_norm, team_abbrev), by = "name_norm"),
+    by = "name_norm"
+  ) %>%
+  distinct(player_name, player_id, .keep_all = TRUE)
+
+player_crosswalk <- bind_rows(player_crosswalk_primary, player_crosswalk_fallback) %>%
+  distinct(player_name, player_id, .keep_all = TRUE)
+
+player_price_history_sc <- player_price_history_2026 %>%
+  inner_join(
+    player_crosswalk %>% select(player_name, player_id),
+    by = "player_name"
   ) %>%
   transmute(
     player_id,
-    player_name = player_name_sc,
+    player_name,
     year,
     round,
     score,
@@ -955,34 +1045,522 @@ player_price_history_sc <- player_price_history_2026_norm %>%
 
 price_match_discrepancies <- team_players_latest %>%
   distinct(user_team_id, round, player_id) %>%
-  left_join(
-    player_id_lookup,
-    by = "player_id"
-  ) %>%
-  left_join(
-    player_price_history_sc %>%
-      distinct(player_id, round) %>%
-      mutate(has_price = TRUE),
+  anti_join(
+    player_price_history_sc %>% distinct(player_id, round),
     by = c("player_id", "round")
   ) %>%
-  mutate(
-    has_price = coalesce(has_price, FALSE)
-  ) %>%
-  filter(!has_price) %>%
+  left_join(player_id_lookup, by = "player_id") %>%
   arrange(round, user_team_id, player_id)
 
 if (nrow(price_match_discrepancies) > 0) {
   print_results(price_match_discrepancies)
-  stop("Stopping: unmatched player_id/round combinations remain in player_price_history_sc")
+  stop("Stopping: unmatched in-league player_id/round combinations remain in player_price_history_sc")
 }
 
-saveRDS(player_price_history_2026, path_player_price_history_2026)
-saveRDS(players_cf_2026, path_players_cf_2026)
-saveRDS(player_id_lookup, path_player_id_lookup)
 saveRDS(player_price_history_sc, path_player_price_history_sc)
 ```
 
-## 15. Build cash and team value by round
+## 13. Build lookup tables from confirmed sources
+
+```{r}
+player_price_rollups <- player_price_history_sc %>%
+  arrange(player_id, round) %>%
+  group_by(player_id) %>%
+  mutate(
+    season_average = cumsum(coalesce(score, 0)) / seq_along(score),
+    avg_3 = roll_mean_right(score, 3),
+    avg_5 = roll_mean_right(score, 5),
+    volatility_score = roll_sd_right(score, 5),
+    floor_score_estimate = roll_min_right(score, 5),
+    ceiling_score_estimate = roll_max_right(score, 5),
+    games_played = cumsum(!is.na(score)),
+    total_points = cumsum(coalesce(score, 0)),
+    price_change_last_round = price - lag(price),
+    cumulative_cash_generation = price - first(price)
+  ) %>%
+  ungroup()
+
+latest_price_rollups <- player_price_rollups %>%
+  group_by(player_id) %>%
+  slice_max(round, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(
+    player_id,
+    latest_round = round,
+    current_price_history = price,
+    season_average,
+    avg_3,
+    avg_5,
+    games_played,
+    total_points,
+    price_change_last_round,
+    cumulative_cash_generation
+  )
+
+player_history_lists <- player_price_history_sc %>%
+  arrange(player_id, round) %>%
+  group_by(player_id) %>%
+  summarise(
+    points_history = list(tibble(round = round, score = score)),
+    minute_history = list(tibble(round = round, mins = mins)),
+    price_history = list(tibble(round = round, price = price)),
+    .groups = "drop"
+  )
+
+master_player_round_latest <- player_catalog %>%
+  left_join(initialvalue_catalog, by = c("full_name" = "player_name", "team_abbrev", "name_norm")) %>%
+  left_join(latest_price_rollups, by = "player_id") %>%
+  left_join(player_history_lists, by = "player_id") %>%
+  transmute(
+    run_ts = run_ts,
+    player_id,
+    full_name,
+    team = coalesce(team_abbrev, team_name),
+    positions = positions,
+    current_price = coalesce(current_price_history, current_price_external),
+    breakeven = NA_real_,
+    current_season_average = season_average,
+    average_3_round = avg_3,
+    average_5_round = avg_5,
+    ownership_percentage = NA_real_,
+    total_points,
+    games_played,
+    status = case_when(
+      !is.na(injury_suspension_status_text) ~ injury_suspension_status_text,
+      !active_flag ~ "inactive",
+      TRUE ~ played_status_display
+    ),
+    injury_detail = injury_suspension_status_text,
+    expected_return = NA_character_,
+    role_tag = NA_character_,
+    goal_kicking_status = NA_character_,
+    starting_status = NA_character_,
+    locked_flag,
+    played_status,
+    active_flag,
+    minute_history,
+    points_history,
+    price_history
+  )
+
+player_scoring_component_history <- player_price_rollups %>%
+  transmute(
+    run_ts = run_ts,
+    player_id,
+    round,
+    total_score = score,
+    base_stats = NA_real_,
+    base_attack = NA_real_,
+    tries = NA_real_,
+    try_assists = NA_real_,
+    linebreaks = NA_real_,
+    linebreak_assists = NA_real_,
+    tackle_busts = NA_real_,
+    offloads = NA_real_,
+    goals = NA_real_,
+    kick_metres = NA_real_,
+    tackles_made = NA_real_,
+    missed_tackles = NA_real_,
+    run_metres = NA_real_,
+    errors = NA_real_,
+    disruptions = NA_character_,
+    minutes_played = mins,
+    starting_position_that_round = NA_character_,
+    base_per_minute = NA_real_,
+    attack_reliance_ratio = NA_real_,
+    volatility_score = volatility_score,
+    floor_score_estimate = floor_score_estimate,
+    ceiling_score_estimate = ceiling_score_estimate,
+    role_adjusted_average = NA_real_,
+    points_per_minute = if_else(!is.na(mins) & mins > 0, score / mins, NA_real_)
+  )
+
+availability_risk_table <- player_catalog %>%
+  transmute(
+    run_ts = run_ts,
+    player_id,
+    full_name,
+    team_abbrev,
+    locked_flag,
+    played_status,
+    played_status_display,
+    active_flag,
+    injury_suspension_status,
+    injury_suspension_status_text,
+    expected_return = NA_character_,
+    risk_band = case_when(
+      !is.na(injury_suspension_status) ~ "high",
+      active_flag & locked_flag ~ "medium",
+      active_flag ~ "low",
+      TRUE ~ "high"
+    )
+  )
+
+my_round_state <- team_round_stats_history %>%
+  filter(user_team_id == grog_baguettes_team_id) %>%
+  group_by(round) %>%
+  slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+position_rules_tbl <- bind_rows_safe(settings$game$positions) %>%
+  transmute(
+    position_id = as.character(id),
+    position_name = as.character(name),
+    position_sort = as.integer(sort),
+    max_players = as.integer(max_players),
+    active_max_players = as.integer(active_max_players)
+  )
+
+game_rules_round_state <- tibble(
+  run_ts = run_ts,
+  league_id = league_id,
+  current_round = current_round,
+  next_round = next_round,
+  competition_status = competition_status,
+  is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
+  is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
+  lockout_start = safe_chr(settings$competition$lockout_start),
+  lockout_end = safe_chr(settings$competition$lockout_end),
+  rolling_lockout = safe_lgl(settings$game$rolling_lockout, FALSE),
+  squad_size = safe_int(settings$game$max_players_for_team),
+  selected_slots = sum(position_rules_tbl$active_max_players, na.rm = TRUE) + safe_int(settings$game$game_num_emergencies, 0L),
+  emergency_slots = safe_int(settings$game$game_num_emergencies),
+  max_total_trades = safe_int(settings$game$game_max_total_changes),
+  max_round_trades_without_boost = safe_int(settings$game$game_max_changes),
+  trades_used_to_date = my_round_state %>% filter(round == current_round) %>% pull(total_changes) %>% { if (length(.) == 0) NA_integer_ else .[[1]] },
+  trades_remaining = safe_int(settings$game$game_max_total_changes) - coalesce(
+    my_round_state %>% filter(round == current_round) %>% pull(total_changes) %>% { if (length(.) == 0) NA_integer_ else .[[1]] },
+    0L
+  ),
+  max_boosts = safe_int(settings$game$max_boosts),
+  boosts_used_to_date = my_round_state %>% filter(round == current_round) %>% pull(trade_boosts_used) %>% { if (length(.) == 0) NA_integer_ else .[[1]] },
+  boosts_remaining = safe_int(settings$game$max_boosts) - coalesce(
+    my_round_state %>% filter(round == current_round) %>% pull(trade_boosts_used) %>% { if (length(.) == 0) NA_integer_ else .[[1]] },
+    0L
+  ),
+  dual_position_enabled = safe_lgl(settings$game$dual_position_players, FALSE),
+  bye_round_structure = list(unlist(settings$game$show_bye_rounds %||% list())),
+  real_bye_rounds = list(unlist(settings$game$real_bye_rounds %||% list())),
+  finals_round = safe_int(settings$game$game_finals_round),
+  scoring_round_end = safe_int(settings$game$final_scoring_round),
+  price_rounding = safe_int(settings$game$rounding_price),
+  position_rules = list(position_rules_tbl),
+  player_lock_state = list(availability_risk_table %>% select(player_id, full_name, locked_flag, played_status, played_status_display))
+)
+
+fixture_triggers <- tibble(
+  run_ts = run_ts,
+  current_round = current_round,
+  next_round = next_round,
+  lockout_start = safe_chr(settings$competition$lockout_start),
+  lockout_end = safe_chr(settings$competition$lockout_end),
+  competition_status = competition_status
+)
+
+team_list_role_certainty <- team_players_latest %>%
+  left_join(
+    player_price_history_sc %>%
+      group_by(player_id) %>%
+      arrange(round, .by_group = TRUE) %>%
+      mutate(likely_minutes = roll_mean_right(mins, 3)) %>%
+      ungroup() %>%
+      select(player_id, round, mins, likely_minutes),
+    by = c("player_id", "round")
+  ) %>%
+  mutate(
+    named_flag = TRUE,
+    jersey_number = if_else(!is.na(position_sort), as.integer(position_sort), NA_integer_),
+    starting_or_bench = case_when(
+      !is.na(position_sort) & position_sort <= 17 ~ "selected",
+      !is.na(position_sort) & position_sort > 17 ~ "reserve",
+      TRUE ~ "unknown"
+    ),
+    listed_position = position,
+    actual_recent_role = position_long,
+    role_change_likelihood = case_when(
+      !is.na(likely_minutes) & likely_minutes < 25 ~ "high",
+      !is.na(likely_minutes) & likely_minutes < 45 ~ "medium",
+      !is.na(likely_minutes) ~ "low",
+      TRUE ~ NA_character_
+    ),
+    likely_late_omission = NA_character_,
+    likely_replacement = NA_character_,
+    injury_cover_flag = NA,
+    return_threat_flag = NA
+  ) %>%
+  select(
+    run_ts, user_team_id, round, player_id, named_flag, jersey_number,
+    starting_or_bench, listed_position, actual_recent_role, likely_minutes,
+    role_change_likelihood, likely_late_omission, likely_replacement,
+    injury_cover_flag, return_threat_flag
+  )
+
+fixture_matchup_table <- tibble(
+  run_ts = as.POSIXct(character()),
+  round = integer(),
+  team_abbrev = character(),
+  opponent = character(),
+  venue = character(),
+  home_away = character(),
+  days_rest = numeric(),
+  travel_burden = character(),
+  short_turnaround_flag = logical(),
+  opponent_recent_form = numeric(),
+  team_recent_form = numeric(),
+  projected_game_total = numeric(),
+  projected_team_scoring_environment = numeric(),
+  opponent_defensive_weakness_by_position = character(),
+  opponent_attacking_weakness_by_position = character(),
+  team_style_indicator = character(),
+  bye_flag = logical(),
+  major_outs_opponent = character(),
+  major_outs_team = character(),
+  matchup_rating_by_player = numeric(),
+  matchup_rating_by_team = numeric(),
+  next_2_rounds_difficulty = numeric(),
+  next_3_rounds_difficulty = numeric(),
+  next_5_rounds_difficulty = numeric(),
+  schedule_swing_indicator = character()
+)
+
+team_performance_context <- tibble(
+  run_ts = as.POSIXct(character()),
+  team_abbrev = character(),
+  round = integer(),
+  points_scored = numeric(),
+  points_conceded = numeric(),
+  tries_scored = numeric(),
+  tries_conceded = numeric(),
+  linebreaks_for = numeric(),
+  linebreaks_against = numeric(),
+  possession_share = numeric(),
+  territory_indicators = character(),
+  completion_rate = numeric(),
+  attacking_trend_last_3 = numeric(),
+  attacking_trend_last_5 = numeric(),
+  defensive_trend_last_3 = numeric(),
+  defensive_trend_last_5 = numeric(),
+  left_edge_vulnerability = numeric(),
+  right_edge_vulnerability = numeric(),
+  middle_defensive_weakness = numeric()
+)
+
+cash_generation_model <- player_catalog %>%
+  left_join(initialvalue_catalog, by = c("full_name" = "player_name", "team_abbrev", "name_norm")) %>%
+  left_join(latest_price_rollups, by = "player_id") %>%
+  transmute(
+    run_ts = run_ts,
+    player_id,
+    full_name,
+    team_abbrev,
+    starting_price = current_price_external,
+    current_price = coalesce(current_price_history, current_price_external),
+    price_change_last_round,
+    cumulative_cash_generation,
+    projected_price_rise_next_round = projected_price_next - coalesce(current_price_history, current_price_external),
+    projected_price_fall_next_round = if_else(projected_price_next < coalesce(current_price_history, current_price_external), projected_price_next - coalesce(current_price_history, current_price_external), 0),
+    breakeven_trend = NA_real_,
+    games_until_peak_cash_estimate = NA_real_,
+    cash_cow_maturity_status = case_when(
+      !is.na(projected_price_next) & projected_price_next > coalesce(current_price_history, current_price_external) ~ "rising",
+      !is.na(projected_price_next) & projected_price_next <= coalesce(current_price_history, current_price_external) ~ "near_peak_or_peaked",
+      TRUE ~ NA_character_
+    ),
+    player_classification = case_when(
+      !is.na(current_price_external) & current_price_external <= 350000 ~ "cash_cow",
+      !is.na(current_price_external) & current_price_external >= 700000 ~ "keeper",
+      !is.na(current_price_external) ~ "stepping_stone",
+      TRUE ~ NA_character_
+    )
+  )
+
+squad_round_enriched <- team_players_latest %>%
+  left_join(
+    player_price_rollups %>%
+      select(player_id, round, score, mins, price, avg_3, avg_5),
+    by = c("player_id", "round")
+  ) %>%
+  left_join(
+    team_lookup %>% select(user_team_id, team_name, coach_name, is_me),
+    by = "user_team_id"
+  ) %>%
+  left_join(
+    master_player_round_latest %>%
+      select(player_id, full_name, positions, locked_flag, status),
+    by = "player_id"
+  ) %>%
+  group_by(user_team_id, player_id) %>%
+  mutate(
+    acquisition_round = min(round, na.rm = TRUE),
+    acquisition_price = price[match(acquisition_round, round)],
+    profit_or_loss = price - acquisition_price
+  ) %>%
+  ungroup() %>%
+  mutate(
+    current_role_security = case_when(
+      !is.na(mins) & mins >= 50 ~ "high",
+      !is.na(mins) & mins >= 30 ~ "medium",
+      !is.na(mins) ~ "low",
+      TRUE ~ NA_character_
+    ),
+    keeper_status = case_when(
+      !is.na(price) & price >= 700000 ~ "keeper",
+      !is.na(price) ~ "non_keeper",
+      TRUE ~ NA_character_
+    ),
+    sell_urgency = case_when(
+      status %in% c("Out", "Suspended") ~ "high",
+      TRUE ~ "normal"
+    ),
+    cover_value = case_when(
+      str_detect(coalesce(positions, ""), "/") ~ "high",
+      TRUE ~ "standard"
+    ),
+    captaincy_value = avg_3,
+    bye_usefulness = NA_real_,
+    dpp_flexibility_usefulness = if_else(str_detect(coalesce(positions, ""), "/"), 1, 0),
+    injury_suspension_risk = status,
+    currently_locked = locked_flag,
+    selected_this_week = !is.na(position_sort) & position_sort <= 17,
+    field_bench_npr = case_when(
+      !is.na(position_sort) & position_sort <= 13 ~ "field",
+      !is.na(position_sort) & position_sort <= 17 ~ "bench",
+      !is.na(position_sort) ~ "npr",
+      TRUE ~ NA_character_
+    ),
+    projected_score_this_week = avg_3,
+    projected_score_next_3_weeks = avg_5,
+    projected_value_change_next_3_weeks = NA_real_
+  ) %>%
+  select(
+    run_ts, user_team_id, team_name, coach_name, is_me, round, player_id, full_name,
+    acquisition_round, acquisition_price, current_price = price, profit_or_loss,
+    current_role_security, keeper_status, sell_urgency, cover_value, captaincy_value,
+    bye_usefulness, dpp_flexibility_usefulness, injury_suspension_risk,
+    currently_locked, selected_this_week, field_bench_npr, projected_score_this_week,
+    projected_score_next_3_weeks, projected_value_change_next_3_weeks
+  )
+
+latest_team_round_stats <- team_round_stats_history %>%
+  group_by(user_team_id, round) %>%
+  slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+opponent_behaviour_history <- team_players_latest %>%
+  group_by(user_team_id, round) %>%
+  summarise(
+    squad_player_ids = list(sort(unique(player_id))),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    inferred_changes %>%
+      group_by(user_team_id, round) %>%
+      summarise(
+        detected_run_ts = max(to_run_ts, na.rm = TRUE),
+        inferred_trade_events = n(),
+        inferred_players_out = sum(players_out_n, na.rm = TRUE),
+        inferred_players_in = sum(players_in_n, na.rm = TRUE),
+        inferred_trade_pairs = list(bind_rows(inferred_trade_pairs)),
+        .groups = "drop"
+      ),
+    by = c("user_team_id", "round")
+  ) %>%
+  left_join(
+    actual_trade_history %>%
+      group_by(user_team_id, round) %>%
+      summarise(
+    actual_trade_count = n(),
+    actual_trades = list(tibble(
+      buy_player_id = buy_player_id,
+      sell_player_id = sell_player_id,
+      trade_source = trade_source
+    )),
+    .groups = "drop"
+  ),
+    by = c("user_team_id", "round")
+  ) %>%
+  left_join(
+    latest_team_round_stats %>%
+      select(user_team_id, round, total_changes, trade_boosts_used),
+    by = c("user_team_id", "round")
+  ) %>%
+  left_join(
+    team_lookup %>% select(user_team_id, team_name, coach_name, is_me),
+    by = "user_team_id"
+  ) %>%
+  mutate(
+    behaviour_source = case_when(
+      !map_lgl(actual_trades, is.null) ~ "actual_api_plus_snapshots",
+      TRUE ~ "snapshot_inference_plus_team_stats"
+    )
+  )
+
+league_ownership_movement <- player_catalog %>%
+  transmute(
+    run_ts = run_ts,
+    player_id,
+    full_name,
+    ownership_percentage = NA_real_,
+    ownership_movement = NA_real_
+  )
+
+captaincy_vc_table <- team_players_latest %>%
+  group_by(user_team_id, round, player_id) %>%
+  summarise(
+    captain_flag = NA,
+    vice_captain_flag = NA,
+    captaincy_source = "unavailable_from_confirmed_sources",
+    .groups = "drop"
+  )
+
+structure_health_table <- squad_round_enriched %>%
+  group_by(user_team_id, team_name, coach_name, is_me, round) %>%
+  summarise(
+    players_in_squad = n_distinct(player_id),
+    selected_players = sum(selected_this_week %in% TRUE, na.rm = TRUE),
+    field_players = sum(field_bench_npr == "field", na.rm = TRUE),
+    bench_players = sum(field_bench_npr == "bench", na.rm = TRUE),
+    npr_players = sum(field_bench_npr == "npr", na.rm = TRUE),
+    locked_players = sum(currently_locked %in% TRUE, na.rm = TRUE),
+    dpp_players = sum(dpp_flexibility_usefulness > 0, na.rm = TRUE),
+    avg_projected_score_this_week = if_else(
+      all(is.na(projected_score_this_week)),
+      NA_real_,
+      mean(projected_score_this_week, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+
+scenario_refresh_table <- tibble(
+  run_ts = run_ts,
+  current_round = current_round,
+  competition_status = competition_status,
+  is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
+  is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
+  next_refresh_trigger = safe_chr(settings$competition$lockout_start),
+  refresh_reason = "competition_lockout_window"
+)
+
+long_horizon_planning_table <- squad_round_enriched %>%
+  filter(is_me %in% TRUE) %>%
+  group_by(user_team_id, team_name, coach_name) %>%
+  filter(round == max(round, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(user_team_id, team_name, coach_name) %>%
+  summarise(
+    run_ts = run_ts,
+    current_round = current_round,
+    current_squad_value = sum(current_price, na.rm = TRUE),
+    projected_score_next_3_weeks = sum(projected_score_next_3_weeks, na.rm = TRUE),
+    trades_remaining = game_rules_round_state$trades_remaining[[1]],
+    boosts_remaining = game_rules_round_state$boosts_remaining[[1]],
+    finals_round = game_rules_round_state$finals_round[[1]],
+    next_bye_rounds = list(game_rules_round_state$bye_round_structure[[1]]),
+    .groups = "drop"
+  )
+```
+
+## 14. Build cash and team value by round
 
 ```{r}
 starting_cap <- 11950000L
@@ -1113,10 +1691,9 @@ if (nrow(negative_cash_check) > 0) {
 }
 ```
 
-## 16. Attach value fields back to ladder history safely
+## 15. Attach value fields back to ladder history safely and save outputs
 
 ```{r}
-# Build one comparison row per team-round to avoid duplicated joins on reruns.
 ladder_value_compare <- ladder_history %>%
   group_by(user_team_id, round) %>%
   slice_max(run_ts, n = 1, with_ties = FALSE) %>%
@@ -1183,7 +1760,171 @@ ladder_history <- ladder_history %>%
     by = c("user_team_id", "round")
   )
 
+checklist_coverage_status <- tibble(
+  checklist_item = c(
+    "game_rules_round_state",
+    "master_player_table",
+    "player_scoring_component_history",
+    "team_list_role_certainty",
+    "fixture_matchup_table",
+    "team_performance_context",
+    "cash_generation_model",
+    "your_squad_table",
+    "opponent_behaviour_history",
+    "league_ownership_movement",
+    "availability_risk_table",
+    "captaincy_vc_table",
+    "trade_candidate_comparison_table",
+    "structure_health_table",
+    "scenario_table",
+    "long_horizon_planning_table"
+  ),
+  table_name = c(
+    "game_rules_round_state",
+    "master_player_round_latest",
+    "player_scoring_component_history",
+    "team_list_role_certainty",
+    "fixture_matchup_table",
+    "team_performance_context",
+    "cash_generation_model",
+    "squad_round_enriched",
+    "opponent_behaviour_history",
+    "league_ownership_movement",
+    "availability_risk_table",
+    "captaincy_vc_table",
+    "trade_candidate_comparison_table",
+    "structure_health_table",
+    "scenario_refresh_table",
+    "long_horizon_planning_table"
+  ),
+  row_count = c(
+    nrow(game_rules_round_state),
+    nrow(master_player_round_latest),
+    nrow(player_scoring_component_history),
+    nrow(team_list_role_certainty),
+    nrow(fixture_matchup_table),
+    nrow(team_performance_context),
+    nrow(cash_generation_model),
+    nrow(squad_round_enriched),
+    nrow(opponent_behaviour_history),
+    nrow(league_ownership_movement),
+    nrow(availability_risk_table),
+    nrow(captaincy_vc_table),
+    0L,
+    nrow(structure_health_table),
+    nrow(scenario_refresh_table),
+    nrow(long_horizon_planning_table)
+  ),
+  status = c(
+    "partial",
+    "partial",
+    "partial",
+    "partial",
+    "unavailable",
+    "unavailable",
+    "partial",
+    "partial",
+    "partial",
+    "unavailable",
+    "partial",
+    "unavailable",
+    "unavailable",
+    "partial",
+    "partial",
+    "partial"
+  ),
+  source_endpoint = c(
+    "/settings, /players-cf, /userteams/{id}/statsPlayers",
+    "/players-cf, initialvalue.php, data-yearplot.php",
+    "data-yearplot.php",
+    "/userteams/{id}/statsPlayers, data-yearplot.php",
+    "Unavailable from confirmed sources",
+    "Unavailable from confirmed sources",
+    "initialvalue.php, data-yearplot.php",
+    "/userteams/{id}/statsPlayers, /players-cf, data-yearplot.php",
+    "/userteams/{id}/statsPlayers, ladderAndFixtures",
+    "Unavailable from confirmed sources",
+    "/players-cf",
+    "Unavailable from confirmed sources",
+    "Unavailable from confirmed sources",
+    "/userteams/{id}/statsPlayers, /players-cf",
+    "/settings",
+    "/settings, /userteams/{id}/statsPlayers"
+  ),
+  notes = c(
+    "Confirmed competition rules, lockout window, squad limits, bye rounds, and player lock state via list columns; Origin-specific rounds remain unavailable.",
+    "Current price, status, team, DPP, history lists, and recent averages are confirmed; breakeven, ownership, role, goal-kicking, and return timeline remain unavailable.",
+    "Confirmed score, minutes, price-derived volatility, floor, ceiling, and PPM; base-stat components are unavailable from confirmed sources.",
+    "Confirmed squad selection order and recent minutes for league rosters; global NRL team lists, role threats, and late omission probabilities remain unavailable.",
+    "No confirmed NRL fixture endpoint with venue/rest/matchup fields was identified in the validated source set.",
+    "No confirmed NRL team performance endpoint with tries, linebreaks, possession, or defensive splits was identified in the validated source set.",
+    "Confirmed starting/current price, recent price movement, projected next price, and cash classification; breakeven trend and peak-cash timing remain unavailable.",
+    "Confirmed acquisition timing, prices, lock state, selection slot, and simple projections; next-3-week value movement and bye utility remain approximate or unavailable.",
+    "Confirmed full squad history, cumulative change counts, and boost usage by team-round; exact opponent ins/outs are only inferred from snapshots unless exposed for the authenticated team.",
+    "Ownership percentage and movement were not present in the confirmed source set.",
+    "Confirmed current active, injury/suspension, and lock indicators from /players-cf; expected return dates remain unavailable.",
+    "Captain and vice-captain selections were not present in the confirmed source set.",
+    "Trade comparison scenarios are not available from confirmed sources and were not fabricated.",
+    "Confirmed structural metrics from squad composition and lock state; bye resilience remains limited without a confirmed NRL fixture source.",
+    "Confirmed competition refresh trigger from /settings lockout window; per-game rolling refresh triggers remain unavailable without a confirmed NRL fixture feed.",
+    "Confirmed long-horizon summary uses current squad value, trades, boosts, and bye rounds; deeper future projection fields remain partial."
+  )
+)
+
 saveRDS(ladder_history, path_ladder_history)
+saveRDS(fixture_triggers, path_fixture_triggers)
+saveRDS(master_player_round_latest, path_master_player_round_latest)
+saveRDS(opponent_behaviour_history, path_opponent_behaviour_history)
+saveRDS(squad_round_enriched, path_squad_round_enriched)
+saveRDS(game_rules_round_state, path_game_rules_round_state)
+saveRDS(player_scoring_component_history, path_player_scoring_component_history)
+saveRDS(team_list_role_certainty, path_team_list_role_certainty)
+saveRDS(fixture_matchup_table, path_fixture_matchup_table)
+saveRDS(team_performance_context, path_team_performance_context)
+saveRDS(cash_generation_model, path_cash_generation_model)
+saveRDS(league_ownership_movement, path_league_ownership_movement)
+saveRDS(availability_risk_table, path_availability_risk_table)
+saveRDS(captaincy_vc_table, path_captaincy_vc_table)
+saveRDS(structure_health_table, path_structure_health_table)
+saveRDS(scenario_refresh_table, path_scenario_refresh_table)
+saveRDS(long_horizon_planning_table, path_long_horizon_planning_table)
+saveRDS(checklist_coverage_status, path_checklist_coverage_status)
+```
+
+## 16. Validation summary
+
+```{r}
+major_tables <- list(
+  game_rules_round_state = game_rules_round_state,
+  master_player_round_latest = master_player_round_latest,
+  player_scoring_component_history = player_scoring_component_history,
+  team_list_role_certainty = team_list_role_certainty,
+  fixture_matchup_table = fixture_matchup_table,
+  team_performance_context = team_performance_context,
+  cash_generation_model = cash_generation_model,
+  squad_round_enriched = squad_round_enriched,
+  opponent_behaviour_history = opponent_behaviour_history,
+  availability_risk_table = availability_risk_table,
+  structure_health_table = structure_health_table,
+  long_horizon_planning_table = long_horizon_planning_table
+)
+
+row_count_summary <- tibble(
+  table_name = names(major_tables),
+  row_count = map_int(major_tables, nrow)
+)
+
+unresolved_gaps <- checklist_coverage_status %>%
+  filter(status != "implemented")
+
+sample_rows <- purrr::imap(
+  major_tables,
+  ~ if (nrow(.x) == 0) NULL else utils::head(.x, 1)
+)
+
+row_count_summary
+unresolved_gaps %>% select(checklist_item, status, notes)
+sample_rows
 ```
 
 ## 17. Final returned objects
@@ -1193,40 +1934,33 @@ list(
   current_round = current_round,
   rounds_pulled = rounds_to_pull,
   ladder_history = ladder_history,
+  fixtures_history = fixtures_history,
   team_players_latest = team_players_latest,
+  team_round_stats_history = team_round_stats_history,
+  actual_trade_history = actual_trade_history,
   inferred_changes = inferred_changes,
   grog_baguettes_latest = grog_baguettes_latest,
   grog_baguettes_changes = grog_baguettes_changes,
   league_change_summary = league_change_summary,
   run_log = run_log,
   team_round_results = team_round_results,
-  team_prices_by_round = team_prices_by_round,
-  trade_events_priced = trade_events_priced,
-  trade_cash_by_round = trade_cash_by_round,
+  player_price_history_sc = player_price_history_sc,
+  master_player_round_latest = master_player_round_latest,
+  player_scoring_component_history = player_scoring_component_history,
+  team_list_role_certainty = team_list_role_certainty,
+  cash_generation_model = cash_generation_model,
+  squad_round_enriched = squad_round_enriched,
+  opponent_behaviour_history = opponent_behaviour_history,
   cash_by_round = cash_by_round,
-  ladder_value_compare = ladder_value_compare
+  ladder_value_compare = ladder_value_compare,
+  fixture_triggers = fixture_triggers,
+  game_rules_round_state = game_rules_round_state,
+  fixture_matchup_table = fixture_matchup_table,
+  team_performance_context = team_performance_context,
+  availability_risk_table = availability_risk_table,
+  structure_health_table = structure_health_table,
+  scenario_refresh_table = scenario_refresh_table,
+  long_horizon_planning_table = long_horizon_planning_table,
+  checklist_coverage_status = checklist_coverage_status
 )
-```
-
-## 18. Optional example output
-
-```{r}
-ladder_history_latest <- ladder_history %>%
-  group_by(user_team_id, round) %>%
-  slice_max(run_ts, n = 1, with_ties = FALSE) %>%
-  ungroup()
-
-ladder_history_latest %>%
-  filter(
-    round == 5,
-    coach_name != "Greg"
-  ) %>%
-  transmute(
-    coach_name,
-    team_name,
-    cash_end_round_calc_num = cash_end_round_calc,
-    cash_end_round_calc = paste0("$", format(cash_end_round_calc, big.mark = ",", scientific = FALSE))
-  ) %>%
-  arrange(desc(cash_end_round_calc_num)) %>%
-  select(-cash_end_round_calc_num)
 ```
