@@ -774,8 +774,12 @@ position_rules_tbl <- bind_rows_safe(settings$game$positions) %>%
 game_rules_round_state <- tibble(
   run_ts = run_ts,
   league_id = league_id,
+  settings_current_round = settings_current_round,
+  settings_next_round = settings_next_round,
   current_round = current_round,
   next_round = next_round,
+  round_inference_source = round_inference_source,
+  round_closed_through_utc = round_closed_through_utc,
   competition_status = competition_status,
   is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
   is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
@@ -810,13 +814,19 @@ game_rules_round_state <- tibble(
 
 fixture_triggers <- tibble(
   run_ts = run_ts,
+  settings_current_round = settings_current_round,
+  settings_next_round = settings_next_round,
   current_round = current_round,
   next_round = next_round,
+  round_inference_source = round_inference_source,
+  round_closed_through_utc = round_closed_through_utc,
   lockout_start = safe_chr(settings$competition$lockout_start),
   lockout_end = safe_chr(settings$competition$lockout_end),
   competition_status = competition_status
 )
 
+# Team-list certainty is still derived from SuperCoach squad snapshots.
+# It is useful for spot checks, but it is not yet an official Tuesday team list / Friday late-mail feed.
 team_list_role_certainty <- team_players_latest %>%
   left_join(
     player_price_history_sc %>%

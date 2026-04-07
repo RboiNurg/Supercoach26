@@ -66,7 +66,12 @@ refresh_supercoach_logs <- function() {
     run_ts = as.POSIXct(character()),
     league_id = integer(),
     first_run = logical(),
+    settings_current_round = integer(),
+    settings_next_round = integer(),
     current_round = integer(),
+    next_round = integer(),
+    round_inference_source = character(),
+    round_closed_through_utc = as.POSIXct(character(), tz = "UTC"),
     rounds_pulled = character(),
     fixture_rounds_pulled = character(),
     mutable_rounds = character(),
@@ -94,8 +99,12 @@ refresh_supercoach_logs <- function() {
   empty_competition_state_history <- tibble(
     run_ts = as.POSIXct(character()),
     league_id = integer(),
+    settings_current_round = integer(),
+    settings_next_round = integer(),
     current_round = integer(),
     next_round = integer(),
+    round_inference_source = character(),
+    round_closed_through_utc = as.POSIXct(character(), tz = "UTC"),
     competition_status = character(),
     is_lockout = logical(),
     is_partial_lockout = logical(),
@@ -189,8 +198,12 @@ refresh_supercoach_logs <- function() {
   empty_source_refresh_log <- tibble(
     run_ts = as.POSIXct(character()),
     league_id = integer(),
+    settings_current_round = integer(),
+    settings_next_round = integer(),
     current_round = integer(),
     next_round = integer(),
+    round_inference_source = character(),
+    round_closed_through_utc = as.POSIXct(character(), tz = "UTC"),
     mutable_rounds = character(),
     rounds_pulled = character(),
     fixture_rounds_pulled = character(),
@@ -427,15 +440,129 @@ refresh_supercoach_logs <- function() {
       filter(!is.na(team_abbrev))
   }
 
-  current_round <- safe_int(settings$competition$current_round)
-  next_round <- safe_int(settings$competition$next_round)
+  infer_effective_round <- function(
+    fixture_history,
+    settings_current_round,
+    settings_next_round,
+    run_ts,
+    season_rounds,
+    close_buffer_hours = 3
+  ) {
+    if (nrow(fixture_history) == 0) {
+      effective_current_round <- settings_current_round
+      effective_next_round <- settings_next_round %||% min(max(season_rounds, na.rm = TRUE), settings_current_round + 1L)
+
+      return(list(
+        current_round = effective_current_round,
+        next_round = effective_next_round,
+        round_inference_source = "settings_only",
+        round_closed_through_utc = as.POSIXct(NA, tz = "UTC")
+      ))
+    }
+
+    run_ts_utc <- as.POSIXct(format(run_ts, tz = "UTC", usetz = TRUE), tz = "UTC")
+    buffer_seconds <- close_buffer_hours * 60 * 60
+    final_states <- c("fulltime", "full time", "post", "completed", "complete")
+
+    fixture_level <- fixture_history %>%
+      filter(!bye_flag %in% TRUE, !is.na(round), !is.na(fixture_key)) %>%
+      group_by(round, fixture_key) %>%
+      slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+      ungroup() %>%
+      transmute(
+        round,
+        fixture_key,
+        kickoff_at_utc,
+        match_state_norm = stringr::str_to_lower(coalesce_chr(match_state)),
+        close_cutoff_utc = if_else(
+          is.na(kickoff_at_utc),
+          as.POSIXct(NA, tz = "UTC"),
+          kickoff_at_utc + buffer_seconds
+        ),
+        fixture_closed = case_when(
+          match_state_norm %in% final_states ~ TRUE,
+          !is.na(close_cutoff_utc) & run_ts_utc >= close_cutoff_utc ~ TRUE,
+          TRUE ~ FALSE
+        )
+      )
+
+    if (nrow(fixture_level) == 0) {
+      effective_current_round <- settings_current_round
+      effective_next_round <- settings_next_round %||% min(max(season_rounds, na.rm = TRUE), settings_current_round + 1L)
+
+      return(list(
+        current_round = effective_current_round,
+        next_round = effective_next_round,
+        round_inference_source = "settings_only",
+        round_closed_through_utc = as.POSIXct(NA, tz = "UTC")
+      ))
+    }
+
+    round_completion <- fixture_level %>%
+      group_by(round) %>%
+      summarise(
+        fixtures_n = n(),
+        closed_fixtures_n = sum(fixture_closed, na.rm = TRUE),
+        round_closed = fixtures_n > 0 & closed_fixtures_n == fixtures_n,
+        round_closed_through_utc = suppressWarnings(max(close_cutoff_utc, na.rm = TRUE)),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        round_closed_through_utc = if_else(
+          is.infinite(round_closed_through_utc),
+          as.POSIXct(NA, tz = "UTC"),
+          round_closed_through_utc
+        )
+      )
+
+    latest_closed_round <- round_completion %>%
+      filter(round_closed %in% TRUE) %>%
+      arrange(desc(round)) %>%
+      slice_head(n = 1)
+
+    inferred_current_round <- if (nrow(latest_closed_round) == 0) {
+      settings_current_round
+    } else {
+      min(max(season_rounds, na.rm = TRUE), latest_closed_round$round[[1]] + 1L)
+    }
+
+    effective_current_round <- max(settings_current_round, inferred_current_round, na.rm = TRUE)
+    effective_next_round <- if (!is.na(settings_next_round) && effective_current_round == settings_current_round) {
+      settings_next_round
+    } else if (effective_current_round >= max(season_rounds, na.rm = TRUE)) {
+      NA_integer_
+    } else {
+      effective_current_round + 1L
+    }
+
+    round_inference_source <- if (effective_current_round > settings_current_round) {
+      "nrl_fixture_completion"
+    } else {
+      "settings"
+    }
+
+    round_closed_through_utc <- if (nrow(latest_closed_round) == 0) {
+      as.POSIXct(NA, tz = "UTC")
+    } else {
+      latest_closed_round$round_closed_through_utc[[1]]
+    }
+
+    list(
+      current_round = effective_current_round,
+      next_round = effective_next_round,
+      round_inference_source = round_inference_source,
+      round_closed_through_utc = round_closed_through_utc
+    )
+  }
+
+  settings_current_round <- safe_int(settings$competition$current_round)
+  settings_next_round <- safe_int(settings$competition$next_round)
   competition_status <- safe_chr(settings$competition$status)
 
-  if (is.na(current_round)) {
+  if (is.na(settings_current_round)) {
     stop("Could not detect current round from /settings")
   }
 
-  mutable_rounds <- sort(unique(c(max(1L, current_round - 1L), current_round)))
   first_run <- nrow(ladder_history_existing) == 0 || nrow(team_round_signatures_existing) == 0
   max_round_available <- max(season_rounds, na.rm = TRUE)
 
@@ -443,33 +570,10 @@ refresh_supercoach_logs <- function() {
     season_rounds
   } else {
     sort(unique(c(
-      max(1L, current_round - 1L),
-      seq.int(current_round, min(max_round_available, current_round + 5L))
+      max(1L, settings_current_round - 1L),
+      seq.int(settings_current_round, min(max_round_available, settings_current_round + 5L))
     )))
   }
-
-  nrl_ladder_rounds_to_pull <- if (nrow(nrl_team_context_history_existing) == 0) {
-    seq_len(current_round)
-  } else {
-    mutable_rounds
-  }
-
-  competition_state_history <- bind_rows(
-    competition_state_history_existing,
-    tibble(
-      run_ts = run_ts,
-      league_id = league_id,
-      current_round = current_round,
-      next_round = next_round,
-      competition_status = competition_status,
-      is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
-      is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
-      lockout_start = safe_chr(settings$competition$lockout_start),
-      lockout_end = safe_chr(settings$competition$lockout_end)
-    )
-  ) %>%
-    distinct(run_ts, .keep_all = TRUE) %>%
-    arrange(run_ts)
 
   nrl_fixture_source_history_new <- map_dfr(nrl_fixture_rounds_to_pull, get_nrl_draw_round)
   nrl_fixture_source_history <- bind_rows(
@@ -478,6 +582,27 @@ refresh_supercoach_logs <- function() {
   ) %>%
     distinct(run_ts, round, team_abbrev, .keep_all = TRUE) %>%
     arrange(run_ts, round, team_abbrev)
+
+  round_inference <- infer_effective_round(
+    fixture_history = nrl_fixture_source_history,
+    settings_current_round = settings_current_round,
+    settings_next_round = settings_next_round,
+    run_ts = run_ts,
+    season_rounds = season_rounds
+  )
+
+  current_round <- round_inference$current_round
+  next_round <- round_inference$next_round
+  round_inference_source <- round_inference$round_inference_source
+  round_closed_through_utc <- round_inference$round_closed_through_utc
+
+  mutable_rounds <- sort(unique(c(max(1L, current_round - 1L), current_round)))
+
+  nrl_ladder_rounds_to_pull <- if (nrow(nrl_team_context_history_existing) == 0) {
+    seq_len(current_round)
+  } else {
+    mutable_rounds
+  }
 
   nrl_team_context_history_new <- map_dfr(nrl_ladder_rounds_to_pull, get_nrl_ladder_round) %>%
     group_by(round) %>%
@@ -490,6 +615,27 @@ refresh_supercoach_logs <- function() {
   ) %>%
     distinct(run_ts, round, team_abbrev, .keep_all = TRUE) %>%
     arrange(run_ts, round, ladder_position, team_abbrev)
+
+  competition_state_history <- bind_rows(
+    competition_state_history_existing,
+    tibble(
+      run_ts = run_ts,
+      league_id = league_id,
+      settings_current_round = settings_current_round,
+      settings_next_round = settings_next_round,
+      current_round = current_round,
+      next_round = next_round,
+      round_inference_source = round_inference_source,
+      round_closed_through_utc = round_closed_through_utc,
+      competition_status = competition_status,
+      is_lockout = safe_lgl(settings$competition$is_lockout, FALSE),
+      is_partial_lockout = safe_lgl(settings$competition$is_partial_lockout, FALSE),
+      lockout_start = safe_chr(settings$competition$lockout_start),
+      lockout_end = safe_chr(settings$competition$lockout_end)
+    )
+  ) %>%
+    distinct(run_ts, .keep_all = TRUE) %>%
+    arrange(run_ts)
 
   players_cf_list <- sc_get_json("/players-cf")
 
@@ -920,7 +1066,12 @@ refresh_supercoach_logs <- function() {
       run_ts = run_ts,
       league_id = league_id,
       first_run = first_run,
+      settings_current_round = settings_current_round,
+      settings_next_round = settings_next_round,
       current_round = current_round,
+      next_round = next_round,
+      round_inference_source = round_inference_source,
+      round_closed_through_utc = round_closed_through_utc,
       rounds_pulled = paste(rounds_to_pull, collapse = ","),
       fixture_rounds_pulled = paste(fixture_rounds_to_pull, collapse = ","),
       mutable_rounds = paste(mutable_rounds, collapse = ","),
@@ -942,8 +1093,12 @@ refresh_supercoach_logs <- function() {
     tibble(
       run_ts = run_ts,
       league_id = league_id,
+      settings_current_round = settings_current_round,
+      settings_next_round = settings_next_round,
       current_round = current_round,
       next_round = next_round,
+      round_inference_source = round_inference_source,
+      round_closed_through_utc = round_closed_through_utc,
       mutable_rounds = paste(mutable_rounds, collapse = ","),
       rounds_pulled = paste(rounds_to_pull, collapse = ","),
       fixture_rounds_pulled = paste(fixture_rounds_to_pull, collapse = ","),
@@ -996,8 +1151,12 @@ refresh_supercoach_logs <- function() {
     settings = settings,
     me_profile = me_profile,
     teams_reference = teams_reference,
+    settings_current_round = settings_current_round,
+    settings_next_round = settings_next_round,
     current_round = current_round,
     next_round = next_round,
+    round_inference_source = round_inference_source,
+    round_closed_through_utc = round_closed_through_utc,
     competition_status = competition_status,
     mutable_rounds = mutable_rounds,
     first_run = first_run,

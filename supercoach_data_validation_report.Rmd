@@ -1,0 +1,588 @@
+---
+title: "SuperCoach Data Validation Report"
+output: html_document
+---
+
+## Purpose
+
+This report is for supervised validation. It reads the saved `.rds` outputs, checks freshness and key integrity, and where possible compares stored state against live source snapshots so you can spot-check what is actually current.
+
+## Setup
+
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(purrr)
+  library(stringr)
+  library(tidyr)
+  library(knitr)
+  library(jsonlite)
+})
+```
+
+## Configuration
+
+```{r}
+league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
+data_dir <- file.path("data", paste0("supercoach_league_", league_id))
+base_url <- "https://www.supercoach.com.au/2026/api/nrl/classic/v1"
+season_rounds <- 1:27
+now_utc <- as.POSIXct(format(Sys.time(), tz = "UTC", usetz = TRUE), tz = "UTC")
+close_buffer_hours <- 3
+has_sc_token <- nzchar(Sys.getenv("SC_BEARER"))
+
+path_game_rules <- file.path(data_dir, "game_rules_round_state.rds")
+path_comp_state <- file.path(data_dir, "competition_state_history.rds")
+path_source_refresh <- file.path(data_dir, "source_refresh_log.rds")
+path_ladder_history <- file.path(data_dir, "ladder_history.rds")
+path_fixtures_history <- file.path(data_dir, "fixtures_history.rds")
+path_players_cf_latest <- file.path(data_dir, "players_cf_latest.rds")
+path_players_cf_history <- file.path(data_dir, "players_cf_history.rds")
+path_team_players_latest <- file.path(data_dir, "team_players_latest.rds")
+path_team_round_stats_history <- file.path(data_dir, "team_round_stats_history.rds")
+path_actual_trade_history <- file.path(data_dir, "actual_trade_history.rds")
+path_inferred_changes <- file.path(data_dir, "inferred_changes.rds")
+path_player_price_history_sc <- file.path(data_dir, "player_price_history_sc.rds")
+path_master_player <- file.path(data_dir, "master_player_round_latest.rds")
+path_availability_risk <- file.path(data_dir, "availability_risk_table.rds")
+path_team_list_role <- file.path(data_dir, "team_list_role_certainty.rds")
+path_fixture_matchup <- file.path(data_dir, "fixture_matchup_table.rds")
+path_team_context <- file.path(data_dir, "team_performance_context.rds")
+path_nrl_fixture_source <- file.path(data_dir, "nrl_fixture_source_history.rds")
+path_nrl_team_context_source <- file.path(data_dir, "nrl_team_context_history.rds")
+```
+
+## Helpers
+
+```{r}
+`%||%` <- function(a, b) {
+  if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
+}
+
+read_optional_rds <- function(path) {
+  if (file.exists(path)) readRDS(path) else NULL
+}
+
+safe_chr <- function(x, default = NA_character_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  as.character(x[[1]])
+}
+
+safe_int <- function(x, default = NA_integer_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  suppressWarnings(as.integer(x[[1]]))
+}
+
+safe_dbl <- function(x, default = NA_real_) {
+  if (is.null(x) || length(x) == 0) return(default)
+  suppressWarnings(as.numeric(x[[1]]))
+}
+
+safe_lgl <- function(x, default = NA) {
+  if (is.null(x) || length(x) == 0) return(default)
+  as.logical(x[[1]])
+}
+
+safe_posixct <- function(x, default = as.POSIXct(NA, tz = "UTC")) {
+  if (is.null(x) || length(x) == 0) return(default)
+  value <- as.character(x[[1]])
+
+  parsed <- suppressWarnings(
+    as.POSIXct(value, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+  )
+
+  if (is.na(parsed)) {
+    parsed <- suppressWarnings(as.POSIXct(value, tz = "UTC"))
+  }
+
+  if (is.na(parsed)) default else parsed
+}
+
+coalesce_chr <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  x
+}
+
+build_url <- function(base, query = list()) {
+  query <- query[!vapply(query, is.null, logical(1))]
+  if (length(query) == 0) {
+    return(base)
+  }
+
+  encoded <- purrr::imap_chr(
+    query,
+    ~ paste0(
+      utils::URLencode(.y, reserved = TRUE),
+      "=",
+      utils::URLencode(as.character(.x), reserved = TRUE)
+    )
+  )
+
+  paste0(base, "?", paste(encoded, collapse = "&"))
+}
+
+http_get_text <- function(url, headers = character()) {
+  con <- base::url(url, headers = headers)
+  on.exit(try(close(con), silent = TRUE), add = TRUE)
+  paste(readLines(con, warn = FALSE), collapse = "\n")
+}
+
+sc_headers <- function() {
+  c(
+    Accept = "application/json",
+    Authorization = paste("Bearer", Sys.getenv("SC_BEARER")),
+    "User-Agent" = "Mozilla/5.0"
+  )
+}
+
+stats_headers <- function() {
+  c("User-Agent" = "Mozilla/5.0")
+}
+
+sc_get_json <- function(path, query = list()) {
+  url <- build_url(paste0(base_url, path), query)
+  txt <- http_get_text(url, sc_headers())
+  jsonlite::fromJSON(txt, simplifyVector = FALSE)
+}
+
+decode_html_json <- function(x) {
+  x %>%
+    gsub("&quot;", "\"", ., fixed = TRUE) %>%
+    gsub("&amp;", "&", ., fixed = TRUE) %>%
+    gsub("&#39;", "'", ., fixed = TRUE)
+}
+
+extract_q_data_json <- function(url, marker) {
+  txt <- http_get_text(url, stats_headers())
+  pattern <- sprintf('id="%s"[^>]*q-data="([^"]+)"', marker)
+  match <- stringr::str_match(txt, pattern)
+
+  if (is.na(match[1, 2])) {
+    stop("Could not extract q-data payload from ", url)
+  }
+
+  jsonlite::fromJSON(decode_html_json(match[1, 2]), simplifyVector = FALSE)
+}
+
+latest_rows <- function(df, group_cols) {
+  if (is.null(df) || !nrow(df)) {
+    return(df)
+  }
+
+  df %>%
+    group_by(across(all_of(group_cols))) %>%
+    slice_max(run_ts, n = 1, with_ties = FALSE) %>%
+    ungroup()
+}
+
+table_health_row <- function(label, path, key_cols = NULL, run_ts_col = "run_ts") {
+  obj <- read_optional_rds(path)
+  row_count <- if (is.data.frame(obj)) nrow(obj) else if (is.null(obj)) NA_integer_ else length(obj)
+  latest_run_ts <- if (is.data.frame(obj) && run_ts_col %in% names(obj) && nrow(obj)) {
+    max(obj[[run_ts_col]], na.rm = TRUE)
+  } else {
+    as.POSIXct(NA)
+  }
+  duplicate_keys <- if (is.data.frame(obj) && !is.null(key_cols) && all(key_cols %in% names(obj))) {
+    obj %>%
+      count(across(all_of(key_cols)), name = "n") %>%
+      filter(n > 1) %>%
+      nrow()
+  } else {
+    NA_integer_
+  }
+
+  tibble(
+    table_name = label,
+    row_count = row_count,
+    file_mtime = if (file.exists(path)) file.info(path)$mtime else as.POSIXct(NA),
+    latest_run_ts = latest_run_ts,
+    duplicate_key_groups = duplicate_keys
+  )
+}
+
+markdown_note <- function(...) {
+  cat(paste0(..., "\n"))
+}
+```
+
+## Load Saved Tables
+
+```{r}
+game_rules <- read_optional_rds(path_game_rules)
+competition_state_history <- read_optional_rds(path_comp_state)
+source_refresh_log <- read_optional_rds(path_source_refresh)
+ladder_history <- read_optional_rds(path_ladder_history)
+fixtures_history <- read_optional_rds(path_fixtures_history)
+players_cf_latest <- read_optional_rds(path_players_cf_latest)
+players_cf_history <- read_optional_rds(path_players_cf_history)
+team_players_latest <- read_optional_rds(path_team_players_latest)
+team_round_stats_history <- read_optional_rds(path_team_round_stats_history)
+actual_trade_history <- read_optional_rds(path_actual_trade_history)
+inferred_changes <- read_optional_rds(path_inferred_changes)
+player_price_history_sc <- read_optional_rds(path_player_price_history_sc)
+master_player <- read_optional_rds(path_master_player)
+availability_risk <- read_optional_rds(path_availability_risk)
+team_list_role <- read_optional_rds(path_team_list_role)
+fixture_matchup <- read_optional_rds(path_fixture_matchup)
+team_context <- read_optional_rds(path_team_context)
+nrl_fixture_source_history <- read_optional_rds(path_nrl_fixture_source)
+nrl_team_context_history <- read_optional_rds(path_nrl_team_context_source)
+
+latest_game_rules <- if (!is.null(game_rules) && nrow(game_rules)) game_rules %>% slice(1) else tibble()
+latest_comp_state <- if (!is.null(competition_state_history) && nrow(competition_state_history)) competition_state_history %>% slice_tail(n = 1) else tibble()
+latest_source_refresh <- if (!is.null(source_refresh_log) && nrow(source_refresh_log)) source_refresh_log %>% slice_tail(n = 1) else tibble()
+```
+
+## Round Audit
+
+```{r}
+fixture_completion <- if (is.null(nrl_fixture_source_history) || !nrow(nrl_fixture_source_history)) {
+  tibble()
+} else {
+  latest_rows(nrl_fixture_source_history, c("round", "fixture_key", "team_abbrev")) %>%
+    filter(!bye_flag %in% TRUE, !is.na(round), !is.na(fixture_key)) %>%
+    transmute(
+      round,
+      fixture_key,
+      kickoff_at_utc,
+      match_state_norm = stringr::str_to_lower(coalesce_chr(match_state)),
+      close_cutoff_utc = kickoff_at_utc + close_buffer_hours * 60 * 60,
+      fixture_closed = case_when(
+        match_state_norm %in% c("fulltime", "full time", "post", "completed", "complete") ~ TRUE,
+        !is.na(close_cutoff_utc) & now_utc >= close_cutoff_utc ~ TRUE,
+        TRUE ~ FALSE
+      )
+    ) %>%
+    group_by(round, fixture_key) %>%
+    summarise(
+      kickoff_at_utc = max(kickoff_at_utc, na.rm = TRUE),
+      close_cutoff_utc = max(close_cutoff_utc, na.rm = TRUE),
+      fixture_closed = any(fixture_closed, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    group_by(round) %>%
+    summarise(
+      fixtures_n = n(),
+      closed_fixtures_n = sum(fixture_closed, na.rm = TRUE),
+      latest_kickoff_utc = suppressWarnings(max(kickoff_at_utc, na.rm = TRUE)),
+      round_closed_through_utc = suppressWarnings(max(close_cutoff_utc, na.rm = TRUE)),
+      round_closed = fixtures_n > 0 & closed_fixtures_n == fixtures_n,
+      .groups = "drop"
+    ) %>%
+    arrange(round)
+}
+
+round_audit <- tibble(
+  audit_field = c(
+    "saved_current_round",
+    "saved_next_round",
+    "saved_settings_current_round",
+    "saved_settings_next_round",
+    "saved_round_inference_source",
+    "saved_round_closed_through_utc"
+  ),
+  value = c(
+    latest_game_rules$current_round[[1]] %||% NA_integer_,
+    latest_game_rules$next_round[[1]] %||% NA_integer_,
+    if ("settings_current_round" %in% names(latest_game_rules)) latest_game_rules$settings_current_round[[1]] else NA_integer_,
+    if ("settings_next_round" %in% names(latest_game_rules)) latest_game_rules$settings_next_round[[1]] else NA_integer_,
+    if ("round_inference_source" %in% names(latest_game_rules)) latest_game_rules$round_inference_source[[1]] else NA_character_,
+    if ("round_closed_through_utc" %in% names(latest_game_rules)) as.character(latest_game_rules$round_closed_through_utc[[1]]) else NA_character_
+  )
+)
+
+kable(round_audit, caption = "Saved round state")
+
+if (nrow(fixture_completion)) {
+  focus_round <- latest_game_rules$current_round[[1]] %||% latest_comp_state$current_round[[1]] %||% 1L
+  kable(
+    fixture_completion %>%
+      filter(round >= max(1L, focus_round - 2L), round <= min(max(season_rounds), focus_round + 2L)),
+    caption = "Official NRL fixture completion audit"
+  )
+}
+```
+
+## Live Source Snapshot
+
+```{r}
+live_settings_tbl <- tibble(note = "Skipped: SC_BEARER not set for this report run.")
+live_players_cf_summary <- tibble(note = "Skipped: SC_BEARER not set for this report run.")
+live_vs_saved_player_diffs <- tibble()
+
+if (has_sc_token) {
+  live_settings <- sc_get_json("/settings")
+  live_players_cf <- sc_get_json("/players-cf")
+
+  live_settings_tbl <- tibble(
+    live_settings_current_round = safe_int(live_settings$competition$current_round),
+    live_settings_next_round = safe_int(live_settings$competition$next_round),
+    live_competition_status = safe_chr(live_settings$competition$status),
+    live_lockout_start = safe_chr(live_settings$competition$lockout_start),
+    live_lockout_end = safe_chr(live_settings$competition$lockout_end)
+  )
+
+  live_players_cf_tbl <- tibble(
+    player_id = map_int(live_players_cf, ~ safe_int(.x$id)),
+    team_abbrev = map_chr(live_players_cf, ~ safe_chr(.x$team$abbrev)),
+    locked_flag = map_lgl(live_players_cf, ~ safe_lgl(.x$locked, FALSE)),
+    played_status = map_chr(live_players_cf, ~ safe_chr(.x$played_status$status)),
+    active_flag = map_lgl(live_players_cf, ~ safe_lgl(.x$active, FALSE)),
+    injury_suspension_status_text = map_chr(live_players_cf, ~ safe_chr(.x$injury_suspension_status_text))
+  )
+
+  live_players_cf_summary <- tibble(
+    metric = c("players_n", "locked_n", "active_n", "injury_text_present_n"),
+    live_value = c(
+      nrow(live_players_cf_tbl),
+      sum(live_players_cf_tbl$locked_flag %in% TRUE, na.rm = TRUE),
+      sum(live_players_cf_tbl$active_flag %in% TRUE, na.rm = TRUE),
+      sum(!is.na(live_players_cf_tbl$injury_suspension_status_text) & nzchar(live_players_cf_tbl$injury_suspension_status_text))
+    ),
+    saved_value = c(
+      if (is.null(players_cf_latest)) NA_integer_ else nrow(players_cf_latest),
+      if (is.null(players_cf_latest)) NA_integer_ else sum(players_cf_latest$locked_flag %in% TRUE, na.rm = TRUE),
+      if (is.null(players_cf_latest)) NA_integer_ else sum(players_cf_latest$active_flag %in% TRUE, na.rm = TRUE),
+      if (is.null(players_cf_latest)) NA_integer_ else sum(!is.na(players_cf_latest$injury_suspension_status_text) & nzchar(players_cf_latest$injury_suspension_status_text))
+    )
+  )
+
+  if (!is.null(players_cf_latest) && nrow(players_cf_latest)) {
+    live_vs_saved_player_diffs <- live_players_cf_tbl %>%
+      full_join(
+        players_cf_latest %>%
+          select(
+            player_id,
+            saved_team_abbrev = team_abbrev,
+            saved_locked_flag = locked_flag,
+            saved_played_status = played_status,
+            saved_active_flag = active_flag,
+            saved_injury_text = injury_suspension_status_text,
+            full_name
+          ),
+        by = "player_id"
+      ) %>%
+      mutate(
+        diff_flag =
+          coalesce(team_abbrev, "") != coalesce(saved_team_abbrev, "") |
+          coalesce(locked_flag, FALSE) != coalesce(saved_locked_flag, FALSE) |
+          coalesce(played_status, "") != coalesce(saved_played_status, "") |
+          coalesce(active_flag, FALSE) != coalesce(saved_active_flag, FALSE) |
+          coalesce(injury_suspension_status_text, "") != coalesce(saved_injury_text, "")
+      ) %>%
+      filter(diff_flag %in% TRUE) %>%
+      transmute(
+        player_id,
+        full_name,
+        live_team_abbrev = team_abbrev,
+        saved_team_abbrev,
+        live_locked_flag = locked_flag,
+        saved_locked_flag,
+        live_played_status = played_status,
+        saved_played_status,
+        live_active_flag = active_flag,
+        saved_active_flag,
+        live_injury_text = injury_suspension_status_text,
+        saved_injury_text
+      ) %>%
+      arrange(full_name)
+  }
+}
+
+kable(live_settings_tbl, caption = "Live SuperCoach settings snapshot")
+kable(live_players_cf_summary, caption = "Live vs saved /players-cf summary")
+
+if (nrow(live_vs_saved_player_diffs)) {
+  kable(utils::head(live_vs_saved_player_diffs, 25), caption = "Live vs saved player-status mismatches (top 25)")
+}
+```
+
+## Freshness Summary
+
+```{r}
+freshness_summary <- bind_rows(
+  table_health_row("game_rules_round_state", path_game_rules),
+  table_health_row("competition_state_history", path_comp_state, key_cols = c("run_ts")),
+  table_health_row("source_refresh_log", path_source_refresh, key_cols = c("run_ts")),
+  table_health_row("ladder_history", path_ladder_history, key_cols = c("run_ts", "round", "user_team_id")),
+  table_health_row("fixtures_history", path_fixtures_history, key_cols = c("run_ts", "fixture_id")),
+  table_health_row("players_cf_history", path_players_cf_history, key_cols = c("run_ts", "player_id")),
+  table_health_row("players_cf_latest", path_players_cf_latest, key_cols = c("player_id")),
+  table_health_row("team_players_latest", path_team_players_latest, key_cols = c("user_team_id", "round", "player_id")),
+  table_health_row("team_round_stats_history", path_team_round_stats_history, key_cols = c("run_ts", "user_team_id", "round")),
+  table_health_row("actual_trade_history", path_actual_trade_history, key_cols = c("round", "user_team_id", "buy_player_id", "sell_player_id")),
+  table_health_row("inferred_changes", path_inferred_changes, key_cols = c("to_run_ts", "user_team_id", "round")),
+  table_health_row("player_price_history_sc", path_player_price_history_sc, key_cols = c("player_id", "round")),
+  table_health_row("master_player_round_latest", path_master_player, key_cols = c("player_id")),
+  table_health_row("availability_risk_table", path_availability_risk, key_cols = c("player_id")),
+  table_health_row("team_list_role_certainty", path_team_list_role, key_cols = c("user_team_id", "round", "player_id")),
+  table_health_row("fixture_matchup_table", path_fixture_matchup, key_cols = c("team_abbrev", "round")),
+  table_health_row("team_performance_context", path_team_context, key_cols = c("team_abbrev", "round")),
+  table_health_row("nrl_fixture_source_history", path_nrl_fixture_source, key_cols = c("run_ts", "round", "team_abbrev")),
+  table_health_row("nrl_team_context_history", path_nrl_team_context_source, key_cols = c("run_ts", "round", "team_abbrev"))
+) %>%
+  mutate(
+    file_mtime = format(file_mtime, tz = "Australia/Sydney", usetz = TRUE),
+    latest_run_ts = format(latest_run_ts, tz = "Australia/Sydney", usetz = TRUE)
+  )
+
+kable(freshness_summary, caption = "Saved table freshness and duplicate-key audit")
+```
+
+## Mutable Source Audit
+
+```{r}
+players_cf_summary <- if (is.null(players_cf_latest) || !nrow(players_cf_latest)) {
+  tibble(note = "players_cf_latest.rds missing")
+} else {
+  tibble(
+    metric = c("players_n", "locked_n", "active_n", "injury_text_present_n"),
+    saved_value = c(
+      nrow(players_cf_latest),
+      sum(players_cf_latest$locked_flag %in% TRUE, na.rm = TRUE),
+      sum(players_cf_latest$active_flag %in% TRUE, na.rm = TRUE),
+      sum(!is.na(players_cf_latest$injury_suspension_status_text) & nzchar(players_cf_latest$injury_suspension_status_text))
+    )
+  )
+}
+
+kable(players_cf_summary, caption = "Saved /players-cf summary")
+
+if (!is.null(players_cf_latest) && nrow(players_cf_latest)) {
+  kable(
+    players_cf_latest %>%
+      filter(!is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text)) %>%
+      select(full_name, team_abbrev, injury_suspension_status, injury_suspension_status_text, locked_flag, played_status_display) %>%
+      arrange(full_name) %>%
+      utils::head(25),
+    caption = "Stored injury / suspension rows (top 25)"
+  )
+}
+
+markdown_note("Current injury and availability feed: SuperCoach `/players-cf`.")
+markdown_note("Caveat: this is a mutable source and should be refreshed repeatedly through the week.")
+markdown_note("Current team-list certainty table is derived from SuperCoach squad snapshots, not an official Tuesday team-list / Friday late-mail feed.")
+markdown_note("If you later switch injury coverage to Zero Tackle or an official list, keep this report and compare saved vs live rows before trusting the swap.")
+```
+
+## Official NRL Source Audit
+
+```{r}
+latest_nrl_fixture_source <- if (is.null(nrl_fixture_source_history) || !nrow(nrl_fixture_source_history)) {
+  tibble()
+} else {
+  latest_rows(nrl_fixture_source_history, c("round", "team_abbrev"))
+}
+
+latest_nrl_team_context <- if (is.null(nrl_team_context_history) || !nrow(nrl_team_context_history)) {
+  tibble()
+} else {
+  latest_rows(nrl_team_context_history, c("round", "team_abbrev"))
+}
+
+focus_round <- latest_game_rules$current_round[[1]] %||% latest_comp_state$current_round[[1]] %||% 1L
+
+if (nrow(latest_nrl_fixture_source)) {
+  kable(
+    latest_nrl_fixture_source %>%
+      filter(round >= focus_round, round <= min(max(season_rounds), focus_round + 2L)) %>%
+      select(round, team_abbrev, opponent_abbrev, home_away, bye_flag, match_state, kickoff_at_utc, source_url) %>%
+      arrange(round, kickoff_at_utc, team_abbrev),
+    caption = "Stored official NRL draw rows for spot check"
+  )
+}
+
+if (nrow(latest_nrl_team_context)) {
+  kable(
+    latest_nrl_team_context %>%
+      filter(round >= max(1L, focus_round - 1L), round <= focus_round) %>%
+      select(round, team_abbrev, ladder_position, next_opponent_abbrev, next_is_bye, streak, form, source_url) %>%
+      arrange(round, ladder_position, team_abbrev),
+    caption = "Stored official NRL ladder/context rows for spot check"
+  )
+}
+```
+
+## Current Output Spot Checks
+
+```{r}
+spot_check_rows <- bind_rows(
+  tibble(table_name = "fixture_matchup_table", row_count = if (is.null(fixture_matchup)) NA_integer_ else nrow(fixture_matchup)),
+  tibble(table_name = "team_performance_context", row_count = if (is.null(team_context)) NA_integer_ else nrow(team_context)),
+  tibble(table_name = "team_list_role_certainty", row_count = if (is.null(team_list_role)) NA_integer_ else nrow(team_list_role)),
+  tibble(table_name = "availability_risk_table", row_count = if (is.null(availability_risk)) NA_integer_ else nrow(availability_risk)),
+  tibble(table_name = "master_player_round_latest", row_count = if (is.null(master_player)) NA_integer_ else nrow(master_player))
+)
+
+kable(spot_check_rows, caption = "Current output row counts")
+
+if (!is.null(fixture_matchup) && nrow(fixture_matchup)) {
+  kable(
+    fixture_matchup %>%
+      filter(round >= focus_round, round <= min(max(season_rounds), focus_round + 2L)) %>%
+      select(round, team_abbrev, opponent, home_away, bye_flag, days_rest, travel_burden, matchup_rating_by_player, schedule_swing_indicator) %>%
+      arrange(round, team_abbrev),
+    caption = "fixture_matchup_table spot check"
+  )
+}
+
+if (!is.null(team_context) && nrow(team_context)) {
+  kable(
+    team_context %>%
+      filter(round >= max(1L, focus_round - 1L), round <= focus_round) %>%
+      select(round, team_abbrev, ladder_position, attacking_trend_last_3, defensive_trend_last_3, recent_form_last_3, next_opponent_abbrev) %>%
+      arrange(round, ladder_position, team_abbrev),
+    caption = "team_performance_context spot check"
+  )
+}
+
+if (!is.null(team_list_role) && nrow(team_list_role)) {
+  kable(
+    team_list_role %>%
+      filter(round == focus_round) %>%
+      select(user_team_id, round, player_id, starting_or_bench, listed_position, actual_recent_role, likely_minutes, role_change_likelihood) %>%
+      utils::head(20),
+    caption = "team_list_role_certainty spot check"
+  )
+}
+```
+
+## Manual Spot-Check Guide
+
+```{r}
+manual_checks <- tibble(
+  dataset = c(
+    "Round state",
+    "Official NRL draw",
+    "Official NRL ladder",
+    "SuperCoach player availability",
+    "Team-list certainty"
+  ),
+  source_url = c(
+    "Authenticated /settings",
+    build_url("https://www.nrl.com/draw/", list(round = focus_round)),
+    build_url("https://www.nrl.com/ladder/", list(round = max(1L, focus_round - 1L))),
+    "Authenticated /players-cf",
+    "Derived from /userteams/{team_id}/statsPlayers"
+  ),
+  what_to_check = c(
+    "current_round, next_round, lockout_start",
+    "opponent, venue, kickoff time, byes, match_state",
+    "ladder positions, streak/form, next opponent",
+    "injury text, locked flag, active flag, played_status",
+    "whether named/bench/minutes still match the latest public news"
+  ),
+  mutable_until = c(
+    "Can lag after round completion",
+    "Until kickoff / official changes",
+    "Until all games in the prior round settle",
+    "All week, often intraday",
+    "Very mutable; current table is not yet an official late-mail source"
+  )
+)
+
+kable(manual_checks, caption = "Manual validation guide")
+```

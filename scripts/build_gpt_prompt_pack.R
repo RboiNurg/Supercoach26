@@ -483,7 +483,9 @@ build_gpt_prompt_pack <- function(
     arrange(desc(run_ts)) %>%
     transmute(
       run_ts = format(run_ts, tz = "Australia/Sydney", usetz = TRUE),
+      settings_current_round = if ("settings_current_round" %in% names(.)) settings_current_round else NA_integer_,
       current_round,
+      round_inference_source = if ("round_inference_source" %in% names(.)) round_inference_source else NA_character_,
       mutable_rounds,
       rounds_pulled,
       fixture_rounds_pulled,

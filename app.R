@@ -683,7 +683,9 @@ server <- function(input, output, session) {
       arrange(desc(run_ts)) %>%
       transmute(
         run_ts = format(run_ts, tz = "Australia/Sydney", usetz = TRUE),
+        settings_current_round = if ("settings_current_round" %in% names(.)) settings_current_round else NA_integer_,
         current_round,
+        round_inference_source = if ("round_inference_source" %in% names(.)) round_inference_source else NA_character_,
         mutable_rounds,
         rounds_pulled,
         fixture_rounds_pulled,
@@ -694,7 +696,30 @@ server <- function(input, output, session) {
   })
 
   output$current_round_text <- renderText({
-    current_round() %||% "NA"
+    data <- dashboard_data()
+    round_value <- current_round()
+
+    if (is.na(round_value)) {
+      return("NA")
+    }
+
+    settings_round <- if (!is.null(data$game_rules) && "settings_current_round" %in% names(data$game_rules)) {
+      data$game_rules$settings_current_round[[1]]
+    } else {
+      NA_integer_
+    }
+
+    inference_source <- if (!is.null(data$game_rules) && "round_inference_source" %in% names(data$game_rules)) {
+      data$game_rules$round_inference_source[[1]]
+    } else {
+      NA_character_
+    }
+
+    if (!is.na(settings_round) && settings_round != round_value) {
+      return(paste0(round_value, " (settings ", settings_round, ", ", inference_source %||% "inferred", ")"))
+    }
+
+    as.character(round_value)
   })
 
   output$last_refresh_text <- renderText({
