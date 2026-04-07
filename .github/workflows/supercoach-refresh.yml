@@ -76,9 +76,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
 
-      - name: Install R packages
-        run: |
-          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr","googledrive"), repos = "https://cloud.r-project.org")'
+      - name: Set up R package cache and dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          cache-version: 2
+          packages: |
+            any::jsonlite
+            any::dplyr
+            any::tibble
+            any::purrr
+            any::tidyr
+            any::stringr
+            any::knitr
+            any::googledrive
 
       - name: Validate SuperCoach secret
         env:
