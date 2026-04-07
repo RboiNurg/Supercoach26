@@ -56,9 +56,95 @@ jobs:
           echo "matched_games=${{ steps.gate.outputs.matched_games }}"
           echo "evaluated_at=${{ steps.gate.outputs.evaluated_at }}"
 
-  refresh:
+  refresh_manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install R packages
+        run: |
+          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr"), repos = "https://cloud.r-project.org")'
+
+      - name: Validate SuperCoach secret
+        env:
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+        run: |
+          if [ -z "${SC_BEARER}" ]; then
+            echo "SC_BEARER GitHub Actions secret is not configured."
+            exit 1
+          fi
+
+      - name: Run refresh pipeline
+        env:
+          SC_BEARER: ${{ secrets.SC_BEARER }}
+        run: |
+          Rscript scripts/run_refresh_pipeline.R
+
+      - name: Generate matchup trade alerts
+        id: matchup_alerts
+        run: |
+          Rscript scripts/generate_matchup_trade_alerts.R >> "$GITHUB_OUTPUT"
+
+      - name: Warn when alerts exist but email is not configured
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO == ''
+        run: |
+          echo "Matchup alerts were detected but email secrets are not configured."
+
+      - name: Send matchup alert email
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.ALERT_EMAIL_SMTP_SERVER }}
+          server_port: ${{ secrets.ALERT_EMAIL_SMTP_PORT }}
+          username: ${{ secrets.ALERT_EMAIL_USERNAME }}
+          password: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          subject: ${{ steps.matchup_alerts.outputs.email_subject }}
+          to: ${{ secrets.ALERT_EMAIL_TO }}
+          from: ${{ secrets.ALERT_EMAIL_FROM }}
+          body: ${{ steps.matchup_alerts.outputs.email_body }}
+
+      - name: Mark matchup alerts as sent
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO != ''
+        run: |
+          Rscript scripts/mark_matchup_trade_alerts_sent.R
+
+      - name: Upload refreshed data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supercoach-data-${{ github.run_id }}
+          path: data/supercoach_league_21064
+          if-no-files-found: error
+
+      - name: Commit refreshed data
+        if: env.COMMIT_REFRESHED_DATA_TO_GIT == 'true'
+        env:
+          TRIGGER_REASON: manual_dispatch
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No data changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/supercoach_league_21064
+          git commit -m "[auto] Refresh SuperCoach data (${TRIGGER_REASON})"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+  refresh_scheduled:
     needs: gate
-    if: github.event_name == 'workflow_dispatch' || needs.gate.outputs.should_run == 'true'
+    if: github.event_name != 'workflow_dispatch' && needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     env:
       ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
