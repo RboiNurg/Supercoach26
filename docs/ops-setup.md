@@ -122,9 +122,65 @@ Use them for:
 2. Use `Refresh From Storage` to pull the latest Drive bundle.
 3. Use `Build GPT Pack` inside the app when you want a fresh export without waiting for another workflow run.
 
+## 7. Deploy the phone dashboard
+
+Recommended host: Posit Connect Cloud.
+
+Why this host:
+
+- it supports Shiny apps directly from GitHub
+- it supports encrypted app variables for the Drive secrets
+- it gives you a public mobile-friendly URL you can open on Android
+- it can automatically republish when you push new code
+
+This repo now includes `manifest.json`, which Connect Cloud requires for R deployments.
+
+### Publish steps
+
+1. Make sure the repository is public, or use a paid Connect Cloud plan if you want private-repo publishing.
+2. Sign in to Posit Connect Cloud.
+3. Install the Connect Cloud GitHub app if prompted.
+4. Click `Publish`.
+5. Choose `Shiny`.
+6. Select this repository.
+7. Choose the default branch after you merge the PR.
+8. Select `app.R` as the primary file.
+9. In `Advanced settings`, add these app variables:
+   - `SC_GDRIVE_FOLDER_ID`
+   - `GDRIVE_SERVICE_JSON_B64`
+   - `SC_LEAGUE_ID` = `21064`
+10. Publish.
+
+After that you will get a public app URL you can save to your phone home screen.
+
+### What the deployed app will do
+
+- load bundled seed data on first boot
+- sync the latest data bundle from Google Drive
+- let you tap `Refresh From Storage`
+- let you build and download the GPT pack inside the app
+- keep app writes in a runtime cache instead of the packaged repo directory
+
+## 8. End-to-end phone test after merge
+
+1. Merge the PR into the default branch.
+2. Open GitHub on your phone.
+3. Run `SuperCoach Refresh`.
+4. Wait for the run to finish green.
+5. Run `SuperCoach Analysis Export`.
+6. Wait for that run to finish green.
+7. Open the Connect Cloud app URL on your phone.
+8. Tap `Refresh From Storage`.
+9. Check the `Overview`, `Matchup`, `Signals`, and `Export` tabs.
+10. Tap `Build GPT Pack` in the app and confirm the preview updates.
+11. Confirm the Drive bundle updates and any matchup trade email alerts still work.
+
 ## Official setup references
 
 - GitHub Actions secrets: https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions
 - Google service account keys: https://cloud.google.com/iam/docs/keys-create-delete
 - Google Drive API quickstart: https://developers.google.com/workspace/drive/api/quickstart/python
 - Google app passwords: https://support.google.com/accounts/answer/185833?hl=en
+- Connect Cloud publish from GitHub: https://docs.posit.co/connect-cloud/user/publish/github.html
+- Connect Cloud content settings and variables: https://docs.posit.co/connect-cloud/user/manage/content_settings.html
+- Connect Cloud Shiny for R requirements: https://docs.posit.co/connect-cloud/user/content/shiny.html

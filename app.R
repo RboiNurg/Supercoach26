@@ -12,11 +12,39 @@ suppressPackageStartupMessages({
 }
 
 league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
-data_dir <- file.path("data", paste0("supercoach_league_", league_id))
+bundled_data_dir <- file.path("data", paste0("supercoach_league_", league_id))
+runtime_root <- Sys.getenv(
+  "SC_APP_RUNTIME_ROOT",
+  file.path(tempdir(), "supercoach-dashboard-cache")
+)
+data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 drive_sync_script <- "scripts/google_drive_bundle_sync.R"
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
 app_state$last_drive_sync <- as.POSIXct(NA)
+
+initialize_runtime_data_dir <- function() {
+  dir.create(runtime_root, recursive = TRUE, showWarnings = FALSE)
+
+  if (dir.exists(data_dir)) {
+    return(invisible(data_dir))
+  }
+
+  if (dir.exists(bundled_data_dir)) {
+    dir.create(dirname(data_dir), recursive = TRUE, showWarnings = FALSE)
+    file.copy(
+      from = bundled_data_dir,
+      to = dirname(data_dir),
+      recursive = TRUE
+    )
+  } else {
+    dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+
+  invisible(data_dir)
+}
+
+initialize_runtime_data_dir()
 
 read_required_rds <- function(path) {
   if (!file.exists(path)) {
@@ -133,7 +161,8 @@ theme_sc <- bs_theme(
 metric_card <- function(title, output_id, subtitle = NULL) {
   card(
     class = "shadow-sm border-0 h-100",
-    card_body(
+    div(
+      class = "card-body",
       tags$div(class = "text-muted text-uppercase small", title),
       tags$div(class = "display-6 fw-bold", textOutput(output_id)),
       if (!is.null(subtitle)) tags$div(class = "small text-muted mt-2", subtitle)
@@ -282,7 +311,8 @@ ui <- page_navbar(
     ),
     card(
       card_header("Export Status"),
-      card_body(
+      div(
+        class = "card-body",
         textOutput("prompt_pack_status"),
         tags$div(class = "small text-muted mt-2", "This pack is meant for your custom GPT. The dashboard is for scanning, not final reasoning.")
       )
