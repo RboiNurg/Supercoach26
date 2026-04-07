@@ -75,23 +75,25 @@ manifest$packages[drop_packages] <- NULL
 
 cran_db <- available.packages(repos = "https://cloud.r-project.org")
 
-if ("isoband" %in% rownames(cran_db)) {
-  fields <- colnames(cran_db)
-  fields <- fields[fields != "Package"]
+for (pkg in c("isoband", "xtable")) {
+  if (pkg %in% rownames(cran_db)) {
+    fields <- colnames(cran_db)
+    fields <- fields[fields != "Package"]
 
-  isoband_desc <- list(Package = "isoband")
-  for (field in fields) {
-    value <- cran_db["isoband", field]
-    if (!is.na(value) && nzchar(value)) {
-      isoband_desc[[field]] <- value
+    pkg_desc <- list(Package = pkg)
+    for (field in fields) {
+      value <- cran_db[pkg, field]
+      if (!is.na(value) && nzchar(value)) {
+        pkg_desc[[field]] <- value
+      }
     }
-  }
 
-  manifest$packages$isoband <- list(
-    Source = "CRAN",
-    Repository = "https://cloud.r-project.org",
-    description = isoband_desc
-  )
+    manifest$packages[[pkg]] <- list(
+      Source = "CRAN",
+      Repository = "https://cloud.r-project.org",
+      description = pkg_desc
+    )
+  }
 }
 
 write_json(
