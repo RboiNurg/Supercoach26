@@ -18,10 +18,8 @@ runtime_root <- Sys.getenv(
   file.path(tempdir(), "supercoach-dashboard-cache")
 )
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
-drive_sync_script <- "scripts/google_drive_bundle_sync.R"
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-app_state$last_drive_sync <- as.POSIXct(NA)
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -105,63 +103,13 @@ read_optional_csv <- function(path) {
   )
 }
 
-sync_from_drive_if_needed <- function(force = FALSE) {
-  if (!file.exists(drive_sync_script)) {
-    initialize_runtime_data_dir()
-    return(invisible(FALSE))
-  }
-
-  source(drive_sync_script, local = TRUE)
-
-  if (!exists("drive_sync_is_configured", mode = "function") ||
-      !drive_sync_is_configured()) {
-    if (!data_dir_is_populated(data_dir)) {
-      seed_runtime_data_from_bundle(overwrite = TRUE)
-    }
-    return(invisible(FALSE))
-  }
-
-  needs_sync <- force ||
-    is.na(app_state$last_drive_sync) ||
-    as.numeric(difftime(Sys.time(), app_state$last_drive_sync, units = "mins")) >= 5
-
-  if (!needs_sync) {
-    return(invisible(FALSE))
-  }
-
-  drive_result <- try(
-    restore_data_bundle_from_drive(data_dir, league_id),
-    silent = TRUE
-  )
-
-  if (!data_dir_is_populated(data_dir)) {
-    seed_runtime_data_from_bundle(overwrite = TRUE)
-  }
-
-  app_state$last_drive_sync <- Sys.time()
-  invisible(!inherits(drive_result, "try-error"))
-}
-
-upload_to_drive_if_configured <- function() {
-  if (!file.exists(drive_sync_script)) {
-    return(invisible(FALSE))
-  }
-
-  source(drive_sync_script, local = TRUE)
-
-  if (!exists("drive_sync_is_configured", mode = "function") ||
-      !drive_sync_is_configured()) {
-    return(invisible(FALSE))
-  }
-
-  try(
-    upload_data_bundle_to_drive(data_dir, league_id),
-    silent = TRUE
-  )
+reload_bundled_snapshot <- function() {
+  initialize_runtime_data_dir()
+  seed_runtime_data_from_bundle(overwrite = TRUE)
 }
 
 load_dashboard_data <- function() {
-  sync_from_drive_if_needed(force = FALSE)
+  initialize_runtime_data_dir()
 
   list(
     game_rules = read_required_rds(file.path(data_dir, "game_rules_round_state.rds")),
@@ -366,6 +314,7 @@ ui <- page_navbar(
   theme = theme_sc,
   bg = "#0f2e23",
   inverse = FALSE,
+  fillable = FALSE,
   header = tags$head(
     tags$style(HTML("
       body {
@@ -386,8 +335,15 @@ ui <- page_navbar(
         letter-spacing: 0.04em;
         text-transform: uppercase;
       }
+      .navbar .nav-link,
+      .navbar .navbar-brand {
+        color: rgba(244, 241, 232, 0.95) !important;
+      }
+      .navbar .nav-link.active {
+        color: #f4b63f !important;
+      }
       .bslib-page-nav {
-        max-width: 1120px;
+        max-width: 1220px;
         margin: 0 auto;
       }
       .bslib-page-nav .tab-content {
@@ -476,7 +432,7 @@ ui <- page_navbar(
         background: rgba(255,255,255,0.92);
         box-shadow: 0 16px 34px rgba(18, 44, 33, 0.1);
         margin-bottom: 1rem;
-        overflow: hidden;
+        overflow: visible;
       }
       .sc-card .card-header {
         background: linear-gradient(90deg, rgba(16,63,92,0.08), rgba(11,107,58,0.05));
@@ -512,6 +468,7 @@ ui <- page_navbar(
       }
       .table-wrap {
         overflow-x: auto;
+        overflow-y: visible;
       }
       .table {
         margin-bottom: 0;
@@ -533,6 +490,7 @@ ui <- page_navbar(
       }
       @media (max-width: 900px) {
         .hero-title { font-size: 1.75rem; }
+        .metric-grid { grid-template-columns: 1fr; }
       }
     ")),
     tags$script(HTML("
@@ -547,13 +505,14 @@ ui <- page_navbar(
     "Overview",
     card(
       class = "hero-card",
+      full_screen = TRUE,
       card_body(
         tags$div(class = "hero-kicker", "Live league pulse"),
         tags$div(class = "hero-title", "Scan the week fast, then send the real pack to GPT."),
-        tags$div(class = "hero-copy", "This board is for quick speculation, freshness checks, and matchup feel. The heavier decision logic still belongs in your exported weekly prompt pack."),
+        tags$div(class = "hero-copy", "This board is for quick speculation, freshness checks, and matchup feel. GitHub Actions now refreshes the repo snapshot on a schedule, and this app is seeded from that deployed snapshot."),
         div(
           class = "action-bar",
-          actionButton("refresh_app_data", "Refresh From Storage", class = "btn-sc"),
+          actionButton("refresh_app_data", "Reload Bundled Snapshot", class = "btn-sc"),
           downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn-sc-outline")
         ),
         tags$div(class = "hero-note", textOutput("snapshot_status_text"))
@@ -563,24 +522,27 @@ ui <- page_navbar(
       class = "metric-grid",
       metric_card("Current Round", "current_round_text"),
       metric_card("Snapshot Round", "snapshot_round_text"),
-      metric_card("Last Refresh", "last_refresh_text"),
+      metric_card("Last Data Refresh", "last_refresh_text"),
       metric_card("Current Matchup", "matchup_text"),
       metric_card("Latest GPT Pack", "latest_export_text")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("League Financial Snapshot"),
       plotOutput("league_finance_plot", height = "360px"),
       card_footer(class = "section-note", "Squad value vs cash balance, with projected weekly strength shown by bubble size.")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Fixture Runway"),
       plotOutput("fixture_runway_plot", height = "340px"),
       card_footer(class = "section-note", "Next five rounds of official NRL fixture difficulty for your side and this week's opponent.")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("League Schedule Window"),
       responsive_table("league_schedule_table")
     )
@@ -591,31 +553,37 @@ ui <- page_navbar(
       class = "section-stack",
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Head-to-Head Comparison"),
         plotOutput("matchup_compare_plot", height = "360px")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Opponent Fingerprint"),
         responsive_table("opponent_profile_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Your Availability Watch"),
         responsive_table("your_availability_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Opponent Availability Watch"),
         responsive_table("opponent_availability_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Opponent Trade Timeline"),
         plotOutput("opponent_trade_plot", height = "320px")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("NRL Club Exposure"),
         plotOutput("club_exposure_plot", height = "320px")
       )
@@ -627,26 +595,31 @@ ui <- page_navbar(
       class = "section-stack",
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Your Squad Leverage Watch"),
         responsive_table("your_signal_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Next-Round Market Watchlist"),
         responsive_table("market_watch_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("Cash Generation Radar"),
         responsive_table("cash_watch_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("NRL Context Watch"),
         responsive_table("nrl_context_table")
       ),
       card(
         class = "sc-card",
+        full_screen = TRUE,
         card_header("NRL Trend Radar"),
         plotOutput("team_performance_plot", height = "360px"),
         card_footer(class = "section-note", "Attacking trend lines for the NRL clubs most represented in this week's head-to-head.")
@@ -657,16 +630,19 @@ ui <- page_navbar(
     "League",
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("League Table"),
       responsive_table("league_snapshot_table")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Refresh Log"),
       responsive_table("source_health_table")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Coverage Gaps"),
       responsive_table("coverage_gap_table")
     )
@@ -680,6 +656,7 @@ ui <- page_navbar(
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Export Status"),
       div(
         class = "card-body",
@@ -689,16 +666,19 @@ ui <- page_navbar(
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Origin Watch"),
       responsive_table("origin_watch_table")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("Weekly Notes"),
       verbatimTextOutput("weekly_notes_text")
     ),
     card(
       class = "sc-card",
+      full_screen = TRUE,
       card_header("GPT Pack Preview"),
       verbatimTextOutput("prompt_pack_preview")
     )
@@ -709,11 +689,40 @@ server <- function(input, output, session) {
   refresh_nonce <- reactiveVal(Sys.time())
   prompt_status <- reactiveVal("No GPT pack built in this session.")
 
+  safe_text <- function(expr, fallback = "Unavailable") {
+    renderText({
+      tryCatch(expr, error = function(e) fallback)
+    })
+  }
+
+  safe_table <- function(expr) {
+    renderTable({
+      tryCatch(
+        expr,
+        error = function(e) data.frame(Status = conditionMessage(e), check.names = FALSE)
+      )
+    }, striped = TRUE, bordered = TRUE, spacing = "s")
+  }
+
+  safe_plot <- function(expr) {
+    renderPlot({
+      tryCatch(
+        expr,
+        error = function(e) {
+          plot.new()
+          title(main = "Chart unavailable")
+          text(0.5, 0.55, "This panel is waiting on data.", cex = 1)
+          text(0.5, 0.42, conditionMessage(e), cex = 0.85, col = "#56645c")
+        }
+      )
+    })
+  }
+
   observeEvent(input$refresh_app_data, {
-    sync_from_drive_if_needed(force = TRUE)
+    reload_bundled_snapshot()
     refresh_nonce(Sys.time())
-    prompt_status("Dashboard data refreshed from storage.")
-    showNotification("Dashboard refreshed from Drive/storage.", type = "message", duration = 4)
+    prompt_status("Dashboard data reloaded from the deployed GitHub snapshot.")
+    showNotification("Dashboard reloaded from the deployed snapshot.", type = "message", duration = 4)
   })
 
   observeEvent(input$build_prompt_pack, {
@@ -732,7 +741,6 @@ server <- function(input, output, session) {
       return()
     }
 
-    upload_to_drive_if_configured()
     refresh_nonce(Sys.time())
     prompt_status(
       paste(
@@ -1103,7 +1111,7 @@ server <- function(input, output, session) {
       slice_head(n = 6)
   })
 
-  output$current_round_text <- renderText({
+  output$current_round_text <- safe_text({
     round_value <- current_round()
 
     if (is.na(round_value)) {
@@ -1120,7 +1128,7 @@ server <- function(input, output, session) {
     paste0("R", round_value)
   })
 
-  output$snapshot_round_text <- renderText({
+  output$snapshot_round_text <- safe_text({
     round_value <- snapshot_round()
     if (is.na(round_value)) {
       return("Unavailable")
@@ -1128,7 +1136,7 @@ server <- function(input, output, session) {
     paste0("R", round_value)
   })
 
-  output$snapshot_status_text <- renderText({
+  output$snapshot_status_text <- safe_text({
     live_round <- current_round()
     stored_round <- snapshot_round()
 
@@ -1137,14 +1145,14 @@ server <- function(input, output, session) {
     }
 
     if (!is.na(live_round) && !is.na(stored_round) && live_round > stored_round) {
-      return(paste0("Live round is R", live_round, " but your saved league snapshot is still R", stored_round, ". Run the refresh workflow once and the board will catch up."))
+      return(paste0("Live round is R", live_round, " but your deployed snapshot is still R", stored_round, ". Let GitHub refresh and auto-republish complete, then reopen the app."))
     }
 
     round_label <- if (!is.na(stored_round)) stored_round else live_round
-    paste0("Live round and saved league snapshot are aligned at R", round_label, ".")
-  })
+    paste0("Live round and deployed snapshot are aligned at R", round_label, ".")
+  }, fallback = "Snapshot status is unavailable.")
 
-  output$last_refresh_text <- renderText({
+  output$last_refresh_text <- safe_text({
     data <- dashboard_data()
     if (is.null(data$source_refresh_log) || nrow(data$source_refresh_log) == 0) {
       return("No refresh yet")
@@ -1152,15 +1160,15 @@ server <- function(input, output, session) {
     format(max(data$source_refresh_log$run_ts), tz = "Australia/Sydney", usetz = TRUE)
   })
 
-  output$matchup_text <- renderText({
+  output$matchup_text <- safe_text({
     matchup_summary() %>%
       filter(side == "Opponent") %>%
       transmute(label = paste0(trimws(team_name), " (", trimws(coach_name), ")")) %>%
       pull(label) %>%
       first()
-  })
+  }, fallback = "No matchup found")
 
-  output$latest_export_text <- renderText({
+  output$latest_export_text <- safe_text({
     path <- file.path(data_dir, "analysis_export", "latest_gpt_prompt_pack.md")
     if (!file.exists(path)) {
       return("Not built yet")
@@ -1168,7 +1176,7 @@ server <- function(input, output, session) {
     format(file.info(path)$mtime, tz = "Australia/Sydney", usetz = TRUE)
   })
 
-  output$league_finance_plot <- renderPlot({
+  output$league_finance_plot <- safe_plot({
     structure <- dashboard_data()$structure_health
 
     plot_df <- latest_ladder_round() %>%
@@ -1198,7 +1206,7 @@ server <- function(input, output, session) {
       theme(legend.position = "top")
   })
 
-  output$matchup_compare_plot <- renderPlot({
+  output$matchup_compare_plot <- safe_plot({
     plot_df <- matchup_summary() %>%
       transmute(
         side,
@@ -1222,7 +1230,7 @@ server <- function(input, output, session) {
       )
   })
 
-  output$opponent_profile_table <- renderTable({
+  output$opponent_profile_table <- safe_table({
     matchup_summary() %>%
       filter(side == "Opponent") %>%
       transmute(
@@ -1236,9 +1244,9 @@ server <- function(input, output, session) {
         `Locked Players` = locked_players,
         `DPP Players` = dpp_players
       )
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$your_availability_table <- renderTable({
+  output$your_availability_table <- safe_table({
     current_squad_signals() %>%
       filter(side == "You") %>%
       filter(
@@ -1255,9 +1263,9 @@ server <- function(input, output, session) {
         `Proj 3w` = round(projected_score_next_3_weeks, 1)
       ) %>%
       slice_head(n = 12)
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$opponent_availability_table <- renderTable({
+  output$opponent_availability_table <- safe_table({
     current_squad_signals() %>%
       filter(side == "Opponent") %>%
       filter(
@@ -1274,9 +1282,9 @@ server <- function(input, output, session) {
         `Proj 3w` = round(projected_score_next_3_weeks, 1)
       ) %>%
       slice_head(n = 12)
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$opponent_trade_plot <- renderPlot({
+  output$opponent_trade_plot <- safe_plot({
     trade_df <- dashboard_data()$opponent_behaviour %>%
       filter(user_team_id == current_matchup()$opponent_team_id) %>%
       transmute(
@@ -1295,7 +1303,7 @@ server <- function(input, output, session) {
       theme(legend.position = "top")
   })
 
-  output$club_exposure_plot <- renderPlot({
+  output$club_exposure_plot <- safe_plot({
     ggplot(squad_team_mix(), aes(reorder(team_abbrev, player_n), player_n, fill = side)) +
       geom_col(position = "dodge") +
       coord_flip() +
@@ -1305,7 +1313,7 @@ server <- function(input, output, session) {
       theme(legend.position = "top")
   })
 
-  output$fixture_runway_plot <- renderPlot({
+  output$fixture_runway_plot <- safe_plot({
     fixture_df <- dashboard_data()$fixture_matchup %>%
       inner_join(
         squad_team_mix(),
@@ -1331,11 +1339,11 @@ server <- function(input, output, session) {
       theme(legend.position = "top")
   })
 
-  output$league_schedule_table <- renderTable({
+  output$league_schedule_table <- safe_table({
     future_league_schedule()
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$your_signal_table <- renderTable({
+  output$your_signal_table <- safe_table({
     current_squad_signals() %>%
       filter(side == "You", selected_this_week %in% TRUE) %>%
       arrange(desc(signal_score)) %>%
@@ -1350,17 +1358,17 @@ server <- function(input, output, session) {
         Urgency = sell_urgency
       ) %>%
       slice_head(n = 14)
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$market_watch_table <- renderTable({
+  output$market_watch_table <- safe_table({
     market_watchlist()
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$cash_watch_table <- renderTable({
+  output$cash_watch_table <- safe_table({
     cash_watch()
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$nrl_context_table <- renderTable({
+  output$nrl_context_table <- safe_table({
     dashboard_data()$fixture_matchup %>%
       inner_join(squad_team_mix(), by = "team_abbrev", relationship = "many-to-many") %>%
       filter(round >= current_round(), round <= current_round() + 2L) %>%
@@ -1378,9 +1386,9 @@ server <- function(input, output, session) {
       ) %>%
       arrange(Side, Round, desc(Players)) %>%
       slice_head(n = 18)
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$league_snapshot_table <- renderTable({
+  output$league_snapshot_table <- safe_table({
     latest_ladder_round() %>%
       left_join(
         dashboard_data()$team_round_stats_history %>%
@@ -1402,9 +1410,9 @@ server <- function(input, output, session) {
         `Changes` = total_changes,
         `Boosts Used` = trade_boosts_used
       )
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$team_performance_plot <- renderPlot({
+  output$team_performance_plot <- safe_plot({
     selected_abbrevs <- squad_team_mix() %>%
       group_by(team_abbrev) %>%
       summarise(total_players = sum(player_n), .groups = "drop") %>%
@@ -1423,11 +1431,11 @@ server <- function(input, output, session) {
       theme(legend.position = "bottom")
   })
 
-  output$source_health_table <- renderTable({
+  output$source_health_table <- safe_table({
     source_health()
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$coverage_gap_table <- renderTable({
+  output$coverage_gap_table <- safe_table({
     dashboard_data()$checklist_coverage %>%
       filter(status != "implemented") %>%
       transmute(
@@ -1436,13 +1444,13 @@ server <- function(input, output, session) {
         Notes = notes
       ) %>%
       slice_head(n = 12)
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$prompt_pack_status <- renderText({
+  output$prompt_pack_status <- safe_text({
     prompt_status()
   })
 
-  output$origin_watch_table <- renderTable({
+  output$origin_watch_table <- safe_table({
     data <- dashboard_data()$origin_watch
 
     if (is.null(data) || nrow(data) == 0) {
@@ -1450,14 +1458,14 @@ server <- function(input, output, session) {
     }
 
     data
-  }, striped = TRUE, bordered = TRUE, spacing = "s")
+  })
 
-  output$weekly_notes_text <- renderText({
+  output$weekly_notes_text <- safe_text({
     dashboard_data()$weekly_notes %||%
       "Add notes to data/supercoach_league_21064/manual_inputs/weekly_context_notes.md and they will appear here and in the GPT pack."
   })
 
-  output$prompt_pack_preview <- renderText({
+  output$prompt_pack_preview <- safe_text({
     text <- dashboard_data()$prompt_pack_text
     if (is.null(text) || !nzchar(text)) {
       return("No GPT pack built yet. Use the Build GPT Pack button or run the manual analysis export workflow.")
@@ -1479,7 +1487,6 @@ server <- function(input, output, session) {
       source(build_prompt_script, local = TRUE)
       result <- build_gpt_prompt_pack(data_dir = data_dir, league_id = league_id)
       file.copy(result$markdown_path, file, overwrite = TRUE)
-      upload_to_drive_if_configured()
     }
   )
 }

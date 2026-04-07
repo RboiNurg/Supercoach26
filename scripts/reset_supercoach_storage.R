@@ -4,7 +4,6 @@ suppressPackageStartupMessages({
 
 league_id <- suppressWarnings(as.integer(Sys.getenv("SC_LEAGUE_ID", "21064")))
 data_dir <- file.path("data", paste0("supercoach_league_", league_id))
-drive_sync_script <- "scripts/google_drive_bundle_sync.R"
 
 preserve_paths <- c(
   file.path(data_dir, "manual_inputs")
@@ -26,41 +25,6 @@ copy_if_exists <- function(path, target_root) {
   }
 
   invisible(TRUE)
-}
-
-delete_drive_bundle_if_configured <- function(league_id) {
-  if (!file_exists(drive_sync_script)) {
-    return(invisible(FALSE))
-  }
-
-  source(drive_sync_script, local = TRUE)
-
-  if (!exists("drive_sync_is_configured", mode = "function") ||
-      !drive_sync_is_configured()) {
-    message("Drive bundle delete skipped: Drive sync is not configured in this environment.")
-    return(invisible(FALSE))
-  }
-
-  tryCatch(
-    {
-      ensure_drive_auth()
-      bundle <- locate_drive_bundle(league_id)
-
-      if (is.null(bundle) || nrow(bundle) == 0) {
-        message("Drive bundle delete skipped: no remote bundle found.")
-        return(invisible(FALSE))
-      }
-
-      googledrive::drive_rm(bundle)
-      message("Deleted remote Drive bundle for league ", league_id, ".")
-      invisible(TRUE)
-    },
-    error = function(e) {
-      message("Drive bundle delete skipped after error: ", conditionMessage(e))
-      message("Manual cleanup may still be required in Google Drive.")
-      invisible(FALSE)
-    }
-  )
 }
 
 message("Resetting generated SuperCoach storage for league ", league_id, "...")
@@ -90,8 +54,6 @@ for (preserved_path in preserve_paths) {
     file_copy(source_path, dest_path, overwrite = TRUE)
   }
 }
-
-delete_drive_bundle_if_configured(league_id)
 
 message("Local generated storage wiped.")
 message("Preserved directories: ", paste(basename(preserve_paths), collapse = ", "))

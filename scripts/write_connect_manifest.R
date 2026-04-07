@@ -35,7 +35,6 @@ app_files <- c(
   "app.R",
   "Purpose and Strategy.md",
   "scripts/build_gpt_prompt_pack.R",
-  "scripts/google_drive_bundle_sync.R",
   file.path(data_prefix, data_files)
 )
 
@@ -61,6 +60,7 @@ drop_packages <- c(
   "callr",
   "desc",
   "evaluate",
+  "googledrive",
   "pkgbuild",
   "pkgload",
   "praise",

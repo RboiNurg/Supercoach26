@@ -71,14 +71,9 @@ jobs:
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
 
-      - name: Install system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
-
       - name: Install R packages
         run: |
-          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr","googledrive"), repos = "https://cloud.r-project.org")'
+          Rscript -e 'install.packages(c("jsonlite","dplyr","tibble","purrr","tidyr","stringr","knitr"), repos = "https://cloud.r-project.org")'
 
       - name: Validate SuperCoach secret
         env:
@@ -92,8 +87,6 @@ jobs:
       - name: Run refresh pipeline
         env:
           SC_BEARER: ${{ secrets.SC_BEARER }}
-          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
-          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
         run: |
           Rscript scripts/run_refresh_pipeline.R
 
@@ -122,12 +115,8 @@ jobs:
 
       - name: Mark matchup alerts as sent
         if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO != ''
-        env:
-          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
-          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
         run: |
           Rscript scripts/mark_matchup_trade_alerts_sent.R
-          Rscript -e "source('scripts/google_drive_bundle_sync.R'); upload_data_bundle_to_drive(file.path('data', paste0('supercoach_league_', Sys.getenv('SC_LEAGUE_ID', '21064'))), as.integer(Sys.getenv('SC_LEAGUE_ID', '21064')))"
 
       - name: Upload refreshed data artifact
         uses: actions/upload-artifact@v4
