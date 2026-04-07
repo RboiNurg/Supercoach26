@@ -1,0 +1,67 @@
+name: SuperCoach Storage Reset
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_text:
+        description: Type WIPE to confirm storage reset
+        required: true
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  SC_LEAGUE_ID: "21064"
+
+jobs:
+  reset:
+    if: github.event.inputs.confirm_text == 'WIPE'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+
+      - name: Install R packages
+        run: |
+          Rscript -e 'install.packages(c("fs","jsonlite","googledrive"), repos = "https://cloud.r-project.org")'
+
+      - name: Reset local and Drive storage
+        env:
+          SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
+        run: |
+          Rscript scripts/reset_supercoach_storage.R
+
+      - name: Commit cleared data state
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No storage changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/supercoach_league_21064
+          git commit -m "[auto] Reset SuperCoach storage"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Upload reset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supercoach-storage-reset-${{ github.run_id }}
+          path: data/supercoach_league_21064
+          if-no-files-found: error
