@@ -178,7 +178,17 @@ safe_lgl <- function(x, default = NA) {
 
 safe_posixct <- function(x, default = as.POSIXct(NA)) {
   if (is.null(x) || length(x) == 0) return(default)
-  suppressWarnings(as.POSIXct(x[[1]], tz = "UTC"))
+  value <- as.character(x[[1]])
+
+  parsed <- suppressWarnings(
+    as.POSIXct(value, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+  )
+
+  if (is.na(parsed)) {
+    parsed <- suppressWarnings(as.POSIXct(value, tz = "UTC"))
+  }
+
+  if (is.na(parsed)) default else parsed
 }
 
 list_to_chr <- function(x) {

@@ -24,6 +24,132 @@ This playbook assumes that outside this markdown file there is data collection a
 
 ---
 
+## Operational end state
+
+This project is intended to become a **phone-accessible decision system**, not just a local analysis script.
+
+The desired operating model is:
+- Greg can manually trigger a data refresh from his phone through a web-accessible control surface
+- the system also runs automatic refresh jobs on a schedule without manual intervention
+- all important history tables persist between runs in durable storage
+- the latest data can be viewed through a mobile-friendly dashboard
+- a separate on-demand action can export the current state into a large structured prompt for ChatGPT analysis
+
+The system should therefore support **two different modes**:
+
+### 1. Refresh mode
+This mode updates logs, history tables, latest-state tables and dashboard-facing outputs.
+
+It should run:
+- manually on demand from phone
+- automatically 3 times per day
+- automatically again at **60, 30 and 15 minutes before every NRL game**
+
+This mode should be optimised for:
+- reliability
+- speed
+- append-safe logging
+- only re-pulling data that is still capable of changing
+
+### 2. Analysis export mode
+This mode should **not** run on every refresh.
+
+It should only run when Greg explicitly asks for it.
+
+Its job is to:
+- gather the latest important tables and summaries
+- convert them into a clean structured text package
+- include league state, squad state, opponent state, trade options and fixture context
+- include the active strategic assumptions from this document
+- output a prompt package that can be pasted into ChatGPT for weekly analysis
+
+The export layer should be treated as a downstream consumer of the data pipeline, not as part of core refresh infrastructure.
+
+---
+
+## Delivery architecture assumptions
+
+Unless a better deployment option is chosen later, assume the project will be delivered as:
+- a scheduled refresh pipeline
+- a mobile-friendly Shiny dashboard or equivalent browser-based web app
+- an on-demand prompt export generator
+
+A practical default trigger model is:
+- manual phone-triggered runs through a web-accessible GitHub Actions workflow or equivalent webhook layer
+- scheduled background runs driven by cron-style automation
+
+For practical purposes, assume:
+- the dashboard must be comfortably usable on an Android phone browser
+- the trigger mechanism must work from phone without requiring local RStudio access
+- the storage layer must be durable across reruns and deployments
+
+If GitHub Actions is used for scheduling:
+- the manual trigger should use a workflow that supports direct manual execution
+- the scheduled jobs should avoid fragile top-of-the-hour timing where possible
+
+If the eventual hosting platform does **not** guarantee persistent local file storage, the project must use an external storage layer for logs and derived tables.
+
+Acceptable storage options for this project include:
+- Google Drive backed file storage for `.rds`, `.csv`, prompt exports and intermediate outputs
+- a lightweight database if the system later outgrows file-based storage
+
+The storage model should be designed so it can start simple and be upgraded later without changing the strategic logic in this document.
+
+---
+
+## Refresh logic requirements
+
+The refresh pipeline should think in terms of **immutable** versus **mutable** information.
+
+### Mostly immutable after completion
+These should normally be appended once finalised and only rarely revisited:
+- finished historical player scores
+- finished round cash outcomes
+- completed squad history
+- completed league matchup outcomes
+- settled team performance results from prior rounds
+
+### Potentially mutable until lockout or late mail settles
+These should be refreshed more aggressively:
+- current round squads and lineup status
+- future fixtures
+- injury and suspension status
+- team lists and late changes
+- opponent trade behaviour during rolling lockout
+- role changes caused by bench/start switches
+- anything tied to upcoming kickoff timing
+
+The pipeline should prefer:
+- append-history logs as the source of truth
+- latest-state tables rebuilt from logs
+- minimal recomputation where business keys and timestamps show nothing has changed
+
+---
+
+## Interface outputs
+
+The intended user-facing outputs are:
+
+### 1. Mobile dashboard
+A mobile dashboard should expose, at minimum:
+- current league situation
+- this week's opponent and matchup context
+- squad status and structural strengths or weaknesses
+- important price and cash movement
+- live lockout and pre-game alerts
+- this week's interesting edges, risks and decision pressure points
+
+### 2. Prompt export package for ChatGPT
+The prompt export should contain:
+- the current data snapshot
+- the most decision-relevant summaries
+- the current strategic assumptions
+- a stable instruction wrapper so ChatGPT knows how to interpret the data each time
+
+The prompt export should support changing strategy settings over time, so the strategic instructions should remain versioned in repository documents rather than hidden inside one-off prompts.
+
+---
+
 ## Competition assumptions
 
 Use this playbook for **NRL SuperCoach Classic, 2026 settings** unless told otherwise.
