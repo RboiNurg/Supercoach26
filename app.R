@@ -545,6 +545,12 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("League Schedule Window"),
       responsive_table("league_schedule_table")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Data Diagnostics"),
+      verbatimTextOutput("data_diagnostic_text")
     )
   ),
   nav_panel(
@@ -652,7 +658,7 @@ ui <- page_navbar(
     div(
       class = "action-bar",
       actionButton("build_prompt_pack", "Build GPT Pack", class = "btn-sc"),
-      downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn-sc-outline")
+      downloadButton("download_prompt_pack_export", "Download Latest GPT Pack", class = "btn-sc-outline")
     ),
     card(
       class = "sc-card",
@@ -1479,7 +1485,37 @@ server <- function(input, output, session) {
     }
   })
 
+  output$data_diagnostic_text <- renderText({
+    data <- dashboard_data()
+
+    lines <- c(
+      paste0("bundled_data_dir: ", normalizePath(bundled_data_dir, winslash = "/", mustWork = FALSE)),
+      paste0("runtime_data_dir: ", normalizePath(data_dir, winslash = "/", mustWork = FALSE)),
+      paste0("bundled_populated: ", data_dir_is_populated(bundled_data_dir)),
+      paste0("runtime_populated: ", data_dir_is_populated(data_dir)),
+      paste0("game_rules_rows: ", if (is.null(data$game_rules)) 0 else nrow(data$game_rules)),
+      paste0("fixtures_rows: ", if (is.null(data$fixtures_history)) 0 else nrow(data$fixtures_history)),
+      paste0("ladder_rows: ", if (is.null(data$ladder_history)) 0 else nrow(data$ladder_history)),
+      paste0("squad_rows: ", if (is.null(data$squad_round_enriched)) 0 else nrow(data$squad_round_enriched)),
+      paste0("cash_rows: ", if (is.null(data$cash_generation)) 0 else nrow(data$cash_generation)),
+      paste0("refresh_log_rows: ", if (is.null(data$source_refresh_log)) 0 else nrow(data$source_refresh_log))
+    )
+
+    paste(lines, collapse = "\n")
+  })
+
   output$download_prompt_pack <- downloadHandler(
+    filename = function() {
+      paste0("supercoach-gpt-pack-round-", current_round() %||% "na", ".md")
+    },
+    content = function(file) {
+      source(build_prompt_script, local = TRUE)
+      result <- build_gpt_prompt_pack(data_dir = data_dir, league_id = league_id)
+      file.copy(result$markdown_path, file, overwrite = TRUE)
+    }
+  )
+
+  output$download_prompt_pack_export <- downloadHandler(
     filename = function() {
       paste0("supercoach-gpt-pack-round-", current_round() %||% "na", ".md")
     },
