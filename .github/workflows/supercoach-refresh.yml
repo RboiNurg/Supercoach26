@@ -59,6 +59,8 @@ jobs:
     needs: gate
     if: needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -101,12 +103,12 @@ jobs:
           Rscript scripts/generate_matchup_trade_alerts.R >> "$GITHUB_OUTPUT"
 
       - name: Warn when alerts exist but email is not configured
-        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO == ''
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO == ''
         run: |
           echo "Matchup alerts were detected but email secrets are not configured."
 
       - name: Send matchup alert email
-        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO != ''
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.ALERT_EMAIL_SMTP_SERVER }}
@@ -119,7 +121,7 @@ jobs:
           body: ${{ steps.matchup_alerts.outputs.email_body }}
 
       - name: Mark matchup alerts as sent
-        if: steps.matchup_alerts.outputs.has_alerts == 'true' && secrets.ALERT_EMAIL_TO != ''
+        if: steps.matchup_alerts.outputs.has_alerts == 'true' && env.ALERT_EMAIL_TO != ''
         env:
           SC_GDRIVE_FOLDER_ID: ${{ secrets.SC_GDRIVE_FOLDER_ID }}
           GDRIVE_SERVICE_JSON_B64: ${{ secrets.GDRIVE_SERVICE_JSON_B64 }}
