@@ -23,21 +23,54 @@ build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
 app_state$last_drive_sync <- as.POSIXct(NA)
 
+key_bundle_files <- c(
+  "game_rules_round_state.rds",
+  "ladder_history.rds",
+  "fixtures_history.rds",
+  "source_refresh_log.rds",
+  "squad_round_enriched.rds"
+)
+
+data_dir_is_populated <- function(path) {
+  if (!dir.exists(path)) {
+    return(FALSE)
+  }
+
+  existing_key_files <- file.exists(file.path(path, key_bundle_files))
+  sum(existing_key_files, na.rm = TRUE) >= 3
+}
+
+seed_runtime_data_from_bundle <- function(overwrite = FALSE) {
+  if (!dir.exists(bundled_data_dir) || !data_dir_is_populated(bundled_data_dir)) {
+    return(FALSE)
+  }
+
+  if (overwrite && dir.exists(data_dir)) {
+    unlink(data_dir, recursive = TRUE, force = TRUE)
+  }
+
+  dir.create(dirname(data_dir), recursive = TRUE, showWarnings = FALSE)
+
+  copied <- file.copy(
+    from = bundled_data_dir,
+    to = dirname(data_dir),
+    recursive = TRUE,
+    overwrite = overwrite
+  )
+
+  any(copied) && data_dir_is_populated(data_dir)
+}
+
 initialize_runtime_data_dir <- function() {
   dir.create(runtime_root, recursive = TRUE, showWarnings = FALSE)
 
-  if (dir.exists(data_dir)) {
+  if (data_dir_is_populated(data_dir)) {
     return(invisible(data_dir))
   }
 
-  if (dir.exists(bundled_data_dir)) {
-    dir.create(dirname(data_dir), recursive = TRUE, showWarnings = FALSE)
-    file.copy(
-      from = bundled_data_dir,
-      to = dirname(data_dir),
-      recursive = TRUE
-    )
-  } else {
+  seeded <- seed_runtime_data_from_bundle(overwrite = TRUE)
+
+  if (!seeded) {
     dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
   }
 
@@ -74,6 +107,7 @@ read_optional_csv <- function(path) {
 
 sync_from_drive_if_needed <- function(force = FALSE) {
   if (!file.exists(drive_sync_script)) {
+    initialize_runtime_data_dir()
     return(invisible(FALSE))
   }
 
@@ -81,6 +115,9 @@ sync_from_drive_if_needed <- function(force = FALSE) {
 
   if (!exists("drive_sync_is_configured", mode = "function") ||
       !drive_sync_is_configured()) {
+    if (!data_dir_is_populated(data_dir)) {
+      seed_runtime_data_from_bundle(overwrite = TRUE)
+    }
     return(invisible(FALSE))
   }
 
@@ -92,13 +129,17 @@ sync_from_drive_if_needed <- function(force = FALSE) {
     return(invisible(FALSE))
   }
 
-  try(
+  drive_result <- try(
     restore_data_bundle_from_drive(data_dir, league_id),
     silent = TRUE
   )
 
+  if (!data_dir_is_populated(data_dir)) {
+    seed_runtime_data_from_bundle(overwrite = TRUE)
+  }
+
   app_state$last_drive_sync <- Sys.time()
-  invisible(TRUE)
+  invisible(!inherits(drive_result, "try-error"))
 }
 
 upload_to_drive_if_configured <- function() {
