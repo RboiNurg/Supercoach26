@@ -1206,6 +1206,10 @@ recommend_planner_cvc_combos <- function(players, n = 5L) {
         if_else(risk_band == "low", 3, if_else(risk_band == "medium", 1, -10)),
       kickoff_order = as.numeric(next_kickoff_utc)
     ) %>%
+    arrange(desc(captain_score), desc(real_score), kickoff_order, player_id) %>%
+    group_by(player_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
     arrange(desc(captain_score)) %>%
     slice_head(n = 8)
 
