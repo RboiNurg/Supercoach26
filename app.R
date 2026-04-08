@@ -1047,6 +1047,53 @@ choose_planner_reserves <- function(players, field_ids, final_ids, current_reser
   head(bench$player_id, n_reserves)
 }
 
+order_planner_bench_ids <- function(players, field_ids, reserve_ids = integer(), current_bench_ids = integer()) {
+  if (is.null(players) || !nrow(players)) {
+    return(integer())
+  }
+
+  current_bench_ids <- current_bench_ids %||% integer()
+  reserve_ids <- reserve_ids %||% integer()
+
+  bench <- players %>%
+    filter(!player_id %in% field_ids) %>%
+    mutate(
+      carried_bench = player_id %in% current_bench_ids,
+      carried_order = match(player_id, current_bench_ids),
+      reserve_on = player_id %in% reserve_ids,
+      kickoff_rank = if_else(
+        is.na(next_kickoff_utc),
+        Inf,
+        as.numeric(as.POSIXct(next_kickoff_utc, tz = "UTC"))
+      )
+    ) %>%
+    arrange(desc(carried_bench), carried_order, desc(reserve_on), kickoff_rank, desc(real_score), player)
+
+  bench$player_id
+}
+
+build_planner_bench_state <- function(players, field_ids, reserve_ids = integer(), current_bench_ids = integer()) {
+  bench_ids <- order_planner_bench_ids(
+    players = players,
+    field_ids = field_ids,
+    reserve_ids = reserve_ids,
+    current_bench_ids = current_bench_ids
+  )
+
+  if (!length(bench_ids)) {
+    return(tibble::tibble())
+  }
+
+  players %>%
+    filter(player_id %in% bench_ids) %>%
+    mutate(
+      bench_rank = match(player_id, bench_ids),
+      Placement = paste("Bench", bench_rank),
+      `Reserve ON` = if_else(player_id %in% (reserve_ids %||% integer()), "Yes", "No")
+    ) %>%
+    arrange(bench_rank)
+}
+
 recommend_planner_cvc_combos <- function(players, n = 5L) {
   if (is.null(players) || !nrow(players)) {
     return(data.frame())
@@ -1257,6 +1304,26 @@ apply_trades_to_assignment <- function(current_assign, future_roster, trades_com
 
 apply_trades_to_reserves <- function(current_reserves, trades_complete) {
   updated <- current_reserves %||% integer()
+  if (!length(updated) || is.null(trades_complete) || !nrow(trades_complete)) {
+    return(updated)
+  }
+
+  for (i in seq_len(nrow(trades_complete))) {
+    out_id <- trades_complete$out_id[[i]]
+    in_id <- trades_complete$in_id[[i]]
+    if (is.na(out_id) || is.na(in_id)) {
+      next
+    }
+    if (out_id %in% updated) {
+      updated[updated == out_id] <- in_id
+    }
+  }
+
+  unique(updated)
+}
+
+apply_trades_to_bench_ids <- function(current_bench_ids, trades_complete) {
+  updated <- current_bench_ids %||% integer()
   if (!length(updated) || is.null(trades_complete) || !nrow(trades_complete)) {
     return(updated)
   }
@@ -1511,6 +1578,29 @@ carry_reserves_from_swaps <- function(current_reserves, bench_pairs, field_ids) 
   unique(updated)
 }
 
+carry_reserves_by_bench_slots <- function(old_bench_ids, new_bench_ids, old_reserves) {
+  old_bench_ids <- old_bench_ids %||% integer()
+  new_bench_ids <- new_bench_ids %||% integer()
+  old_reserves <- old_reserves %||% integer()
+
+  if (!length(old_bench_ids) || !length(new_bench_ids) || !length(old_reserves)) {
+    return(integer())
+  }
+
+  carried <- integer()
+  max_slots <- min(length(old_bench_ids), length(new_bench_ids))
+
+  for (i in seq_len(max_slots)) {
+    old_id <- old_bench_ids[[i]]
+    new_id <- new_bench_ids[[i]]
+    if (!is.na(old_id) && !is.na(new_id) && old_id %in% old_reserves) {
+      carried <- c(carried, new_id)
+    }
+  }
+
+  unique(carried)
+}
+
 describe_reserve_transition <- function(old_ids, new_ids, player_lookup) {
   old_ids <- old_ids %||% integer()
   new_ids <- new_ids %||% integer()
@@ -1576,6 +1666,81 @@ describe_slot_changes <- function(from_assign, to_assign, player_lookup) {
     }),
     collapse = " | "
   )
+}
+
+describe_planner_state_changes <- function(from_assign, from_bench_ids, to_assign, to_bench_ids, player_lookup) {
+  if (is.null(from_assign) || is.null(to_assign) || !nrow(from_assign) || !nrow(to_assign)) {
+    return(list(text = "No lineup change", bench_ids = from_bench_ids %||% integer()))
+  }
+
+  lookup_name <- function(player_id, fallback = "Unknown player") {
+    if (is.na(player_id)) {
+      return(fallback)
+    }
+    matched <- unname(player_lookup[as.character(player_id)])
+    if (!length(matched) || is.na(matched) || !nzchar(matched)) fallback else matched
+  }
+
+  current_field <- setNames(from_assign$player_id, from_assign$slot)
+  current_bench <- from_bench_ids %||% integer()
+  target_field <- setNames(to_assign$player_id, to_assign$slot)
+  steps <- character()
+
+  for (slot_name in to_assign$slot) {
+    desired_id <- target_field[[slot_name]]
+    current_id <- current_field[[slot_name]]
+
+    if (identical(current_id, desired_id)) {
+      next
+    }
+
+    if (desired_id %in% current_bench) {
+      bench_idx <- match(desired_id, current_bench)
+      bench_label <- paste("Bench", bench_idx)
+      steps <- c(
+        steps,
+        paste0(
+          "Swap ", slot_name, " ", lookup_name(current_id), " with ", bench_label, " ", lookup_name(desired_id)
+        )
+      )
+      current_field[[slot_name]] <- desired_id
+      current_bench[[bench_idx]] <- current_id
+      next
+    }
+
+    source_slot <- names(current_field)[match(desired_id, current_field)]
+    if (length(source_slot) && !is.na(source_slot) && nzchar(source_slot)) {
+      source_id <- current_field[[source_slot]]
+      steps <- c(
+        steps,
+        paste0(
+          "Swap ", slot_name, " ", lookup_name(current_id), " with ", source_slot, " ", lookup_name(source_id)
+        )
+      )
+      current_field[[slot_name]] <- source_id
+      current_field[[source_slot]] <- current_id
+      next
+    }
+
+    steps <- c(
+      steps,
+      paste0(slot_name, ": ", lookup_name(current_id), " -> ", lookup_name(desired_id))
+    )
+    current_field[[slot_name]] <- desired_id
+  }
+
+  final_target_bench <- to_bench_ids %||% integer()
+  if (length(final_target_bench)) {
+    stable_bench <- current_bench[current_bench %in% final_target_bench]
+    incoming_bench <- final_target_bench[!final_target_bench %in% stable_bench]
+    current_bench <- c(stable_bench, incoming_bench)
+  }
+
+  if (!length(steps)) {
+    steps <- "No lineup change"
+  }
+
+  list(text = paste(steps, collapse = " | "), bench_ids = current_bench)
 }
 
 prepare_planner_roster <- function(
@@ -2953,8 +3118,20 @@ server <- function(input, output, session) {
     req(!is.null(post_assign), nrow(post_assign) > 0)
 
     pre_reserves <- choose_planner_reserves(current_roster, pre_assign$player_id, current_target_ids)
+    pre_bench_ids <- order_planner_bench_ids(
+      players = current_roster,
+      field_ids = pre_assign$player_id,
+      reserve_ids = pre_reserves
+    )
     post_reserve_seed <- apply_trades_to_reserves(pre_reserves, trades_complete)
+    post_bench_seed <- apply_trades_to_bench_ids(pre_bench_ids, trades_complete)
     post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids, current_reserves = post_reserve_seed)
+    post_bench_ids <- order_planner_bench_ids(
+      players = future_roster,
+      field_ids = post_assign$player_id,
+      reserve_ids = post_reserves,
+      current_bench_ids = post_bench_seed
+    )
 
     cvc_recs <- planner_cvc_recommendations()
     selected_combo <- as.character(input$planner_cvc_choice %||% "")
@@ -3002,6 +3179,7 @@ server <- function(input, output, session) {
 
     state_assign <- pre_assign
     state_reserves <- pre_reserves
+    state_bench_ids <- pre_bench_ids
     state_roster <- current_roster
     move_rows <- list()
 
@@ -3026,8 +3204,25 @@ server <- function(input, output, session) {
         paste0("Trade ", trades_complete$out_player, " -> ", trades_complete$in_player, " into ", incoming_positions),
         collapse = " | "
       )
-      trade_lineup_text <- describe_slot_changes(pre_assign, post_assign, player_lookup)
-      trade_move_text <- paste(c(trade_text, trade_lineup_text[trade_lineup_text != "No lineup change"]), collapse = " | ")
+      trade_lineup <- describe_planner_state_changes(
+        from_assign = pre_assign,
+        from_bench_ids = pre_bench_ids,
+        to_assign = post_assign,
+        to_bench_ids = post_bench_ids,
+        player_lookup = player_lookup
+      )
+      trade_lineup_parts <- if (identical(trade_lineup$text, "No lineup change")) character() else strsplit(trade_lineup$text, " \\| ", perl = TRUE)[[1]]
+      duplicate_trade_parts <- vapply(seq_len(nrow(trades_complete)), function(i) {
+        paste0(
+          incoming_positions[[i]],
+          ": ",
+          trades_complete$out_player[[i]],
+          " -> ",
+          trades_complete$in_player[[i]]
+        )
+      }, character(1))
+      trade_lineup_parts <- setdiff(trade_lineup_parts, duplicate_trade_parts)
+      trade_move_text <- paste(c(trade_text, trade_lineup_parts), collapse = " | ")
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
@@ -3048,6 +3243,7 @@ server <- function(input, output, session) {
       )
       state_assign <- post_assign
       state_reserves <- post_reserves
+      state_bench_ids <- trade_lineup$bench_ids
       state_roster <- future_roster
     }
 
@@ -3081,22 +3277,21 @@ server <- function(input, output, session) {
         next
       }
 
-      merged_swaps <- state_assign %>%
-        select(slot, from_player_id = player_id) %>%
-        inner_join(
-          batch_assign %>% select(slot, to_player_id = player_id),
-          by = "slot"
-        ) %>%
-        filter(from_player_id != to_player_id)
-
-      bench_pairs <- merged_swaps %>%
-        transmute(
-          incoming_id = to_player_id,
-          outgoing_id = from_player_id
-        )
-
-      move_text <- describe_slot_changes(state_assign, batch_assign, player_lookup)
-      carried_reserves <- carry_reserves_from_swaps(state_reserves, bench_pairs, batch_assign$player_id)
+      target_bench_ids <- order_planner_bench_ids(
+        players = state_roster,
+        field_ids = batch_assign$player_id,
+        reserve_ids = state_reserves,
+        current_bench_ids = state_bench_ids
+      )
+      move_state <- describe_planner_state_changes(
+        from_assign = state_assign,
+        from_bench_ids = state_bench_ids,
+        to_assign = batch_assign,
+        to_bench_ids = target_bench_ids,
+        player_lookup = player_lookup
+      )
+      move_text <- move_state$text
+      carried_reserves <- carry_reserves_by_bench_slots(state_bench_ids, move_state$bench_ids, state_reserves)
       next_reserves <- choose_planner_reserves(
         state_roster,
         batch_assign$player_id,
@@ -3142,12 +3337,16 @@ server <- function(input, output, session) {
 
       state_assign <- batch_assign
       state_reserves <- next_reserves
+      state_bench_ids <- move_state$bench_ids
     }
 
     pre_field_ids <- pre_assign$player_id
-    pre_bench <- current_roster %>%
-      filter(!player_id %in% pre_field_ids) %>%
-      arrange(desc(player_id %in% pre_reserves), next_kickoff_utc, desc(real_score), player)
+    pre_bench <- build_planner_bench_state(
+      players = current_roster,
+      field_ids = pre_field_ids,
+      reserve_ids = pre_reserves,
+      current_bench_ids = pre_bench_ids
+    )
 
     starting_setup <- bind_rows(
       pre_assign %>%
@@ -3178,7 +3377,7 @@ server <- function(input, output, session) {
         ),
       pre_bench %>%
         transmute(
-          Placement = "Bench",
+          Placement,
           Player = player,
           Team = team_abbrev,
           Captaincy = case_when(
@@ -3231,28 +3430,39 @@ server <- function(input, output, session) {
       final_ids,
       current_reserves = state_reserves
     )
+    final_bench <- build_planner_bench_state(
+      players = future_roster,
+      field_ids = final_assign$player_id,
+      reserve_ids = final_reserve_ids,
+      current_bench_ids = state_bench_ids
+    )
 
-    final_reserve_setup <- future_roster %>%
-      filter(player_id %in% final_reserve_ids, !player_id %in% final_assign$player_id) %>%
+    final_reserve_setup <- final_bench %>%
       transmute(
-        Slot = "Reserve",
+        Slot = Placement,
         Player = player,
         Team = team_abbrev,
         Captaincy = "",
+        `Reserve ON` = `Reserve ON`,
         `Next Opp` = next_opponent,
         `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
         `Real Score` = round(real_score, 1),
         Why = case_when(
-          risk_band == "high" ~ "reserve scorer carried despite risk because the projected upside still beats other bench options",
-          bye_this_round %in% TRUE ~ "reserve scorer kept for structure only; bye reduces practical value",
-          TRUE ~ "reserve scorer kept in the final four for counting-point upside and flexibility"
+          player_id %in% final_reserve_ids & risk_band == "high" ~ "reserve scorer carried despite risk because the projected upside still beats other bench options",
+          player_id %in% final_reserve_ids & bye_this_round %in% TRUE ~ "reserve scorer kept for structure only; bye reduces practical value",
+          player_id %in% final_reserve_ids ~ "reserve scorer kept in the final four for counting-point upside and flexibility",
+          TRUE ~ "bench cover only after optimising the counting group"
         )
       )
 
-    final_setup <- bind_rows(final_active_setup, final_reserve_setup)
+    final_setup <- bind_rows(
+      final_active_setup %>% mutate(`Reserve ON` = "No"),
+      final_reserve_setup
+    ) %>%
+      select(Slot, Player, Team, Captaincy, `Reserve ON`, `Next Opp`, `Kickoff (AEST)`, `Real Score`, Why)
 
     status_lines <- c(
-      paste0("Real team is optimised for 14 on-field scorers plus ", nrow(final_reserve_setup), " reserve scorers."),
+      paste0("Real team is optimised for 14 on-field scorers plus ", length(final_reserve_ids), " reserve scorers."),
       if (nrow(trades_complete)) paste0("Selected trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | ")) else "Selected trades: no trade.",
       if (!is.na(real_vc_id) || !is.na(real_captain_id)) {
         paste0(
