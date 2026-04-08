@@ -1046,6 +1046,132 @@ choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 
   head(bench$player_id, n_reserves)
 }
 
+recommend_planner_cvc_combos <- function(players, n = 5L) {
+  if (is.null(players) || !nrow(players)) {
+    return(data.frame())
+  }
+
+  candidates <- players %>%
+    filter(
+      !bye_this_round %in% TRUE,
+      !locked_now %in% TRUE,
+      active_flag %in% TRUE | is.na(active_flag)
+    ) %>%
+    mutate(
+      captain_score = real_score +
+        if_else(risk_band == "low", 6, if_else(risk_band == "medium", 2, -12)) +
+        if_else(grepl("goal|kicker|primary", tolower(coalesce(goal_kicking_status, ""))), 5, 0),
+      vc_score = real_score +
+        if_else(risk_band == "low", 3, if_else(risk_band == "medium", 1, -10)),
+      kickoff_order = as.numeric(next_kickoff_utc)
+    ) %>%
+    arrange(desc(captain_score)) %>%
+    slice_head(n = 8)
+
+  if (nrow(candidates) < 2) {
+    return(data.frame())
+  }
+
+  combos <- tidyr::crossing(
+    vc_player_id = candidates$player_id,
+    captain_player_id = candidates$player_id
+  ) %>%
+    filter(vc_player_id != captain_player_id) %>%
+    left_join(
+      candidates %>%
+        transmute(
+          vc_player_id = player_id,
+          vc_player = player,
+          vc_team = team_abbrev,
+          vc_score = vc_score,
+          vc_real_score = real_score,
+          vc_kickoff = next_kickoff_utc
+        ),
+      by = "vc_player_id"
+    ) %>%
+    left_join(
+      candidates %>%
+        transmute(
+          captain_player_id = player_id,
+          captain_player = player,
+          captain_team = team_abbrev,
+          captain_score = captain_score,
+          captain_real_score = real_score,
+          captain_kickoff = next_kickoff_utc
+        ),
+      by = "captain_player_id"
+    ) %>%
+    mutate(
+      vc_before_c = !is.na(vc_kickoff) & !is.na(captain_kickoff) & vc_kickoff < captain_kickoff,
+      time_gap_hours = if_else(
+        !is.na(vc_kickoff) & !is.na(captain_kickoff),
+        as.numeric(difftime(captain_kickoff, vc_kickoff, units = "hours")),
+        0
+      ),
+      combo_score = captain_score + vc_score * 0.92 +
+        if_else(vc_before_c, 8, 0) +
+        pmin(pmax(time_gap_hours, 0), 30) / 4
+    ) %>%
+    arrange(desc(combo_score), desc(captain_real_score), desc(vc_real_score)) %>%
+    mutate(
+      recommendation = row_number(),
+      rationale = case_when(
+        vc_before_c & captain_real_score >= vc_real_score ~ "classic early VC, later anchor C",
+        vc_before_c ~ "earlier VC with later fallback captain",
+        TRUE ~ "best raw projection pairing despite similar lock timing"
+      )
+    ) %>%
+    slice_head(n = n) %>%
+    transmute(
+      recommendation,
+      vc_player_id,
+      captain_player_id,
+      `VC` = vc_player,
+      `VC Team` = vc_team,
+      `VC Kickoff` = format_planner_time(vc_kickoff, fallback = "No kickoff"),
+      `VC Score` = round(vc_real_score, 1),
+      Captain = captain_player,
+      `Captain Team` = captain_team,
+      `Captain Kickoff` = format_planner_time(captain_kickoff, fallback = "No kickoff"),
+      `Captain Score` = round(captain_real_score, 1),
+      `Why This Combo` = rationale,
+      combo_label = paste0(
+        "#", recommendation, " VC ", vc_player, " -> C ", captain_player
+      )
+    )
+
+  combos
+}
+
+choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_, real_c_id = NA_integer_) {
+  if (is.null(pre_assign) || !nrow(pre_assign) || is.null(roster) || !nrow(roster)) {
+    return(list(vc_id = NA_integer_, captain_id = NA_integer_))
+  }
+
+  field_pool <- pre_assign %>%
+    left_join(
+      roster %>%
+        select(player_id, player, bogus_value, real_score, next_kickoff_utc),
+      by = "player_id"
+    ) %>%
+    arrange(desc(bogus_value), desc(real_score))
+
+  candidates <- field_pool$player_id
+  candidates <- unique(candidates[!is.na(candidates)])
+
+  safe_candidates <- setdiff(candidates, c(real_vc_id, real_c_id))
+  if (length(safe_candidates) >= 2) {
+    vc_id <- safe_candidates[[1]]
+    captain_id <- safe_candidates[[2]]
+  } else {
+    vc_id <- if (length(candidates)) candidates[[1]] else NA_integer_
+    captain_pool <- setdiff(candidates, vc_id)
+    captain_id <- if (length(captain_pool)) captain_pool[[1]] else vc_id
+  }
+
+  list(vc_id = vc_id, captain_id = captain_id)
+}
+
 planner_lock_step_assignment <- function(players, slots, current_kickoff, required_ids = integer()) {
   if (is.null(players) || !nrow(players)) {
     return(NULL)
@@ -1992,6 +2118,15 @@ ui <- page_navbar(
           class = "section-note",
           "Pick up to three trades. The planner will build a score-maximising final team, a low-reveal bogus team to start the round, and the exact moves needed to let the real side fall into place under rolling lockout."
         ),
+        tags$h4("Suggested Captain / VC Combos", class = "planner-subheading"),
+        responsive_table("planner_cvc_table"),
+        selectizeInput(
+          "planner_cvc_choice",
+          "Use recommended combo",
+          choices = c("Auto-select top combo" = ""),
+          selected = "",
+          options = list(placeholder = "Auto-select top combo")
+        ),
         fluidRow(
           column(
             width = 6,
@@ -2456,11 +2591,10 @@ server <- function(input, output, session) {
       left_join(market_lookup, by = "in_id")
   })
 
-  planner_bundle <- eventReactive(input$planner_generate, {
+  planner_future_bundle <- reactive({
     current_roster <- current_planner_roster()
     future_market <- planner_market_pool()
     trades <- planner_trades()
-    slots <- slot_template_from_game_rules(dashboard_data()$game_rules)
 
     notes <- character()
     if (nrow(trades)) {
@@ -2487,6 +2621,54 @@ server <- function(input, output, session) {
     ) %>%
       arrange(player_id) %>%
       distinct(player_id, .keep_all = TRUE)
+
+    list(
+      current_roster = current_roster,
+      future_market = future_market,
+      trades = trades,
+      trades_complete = trades_complete,
+      trade_out_ids = trade_out_ids,
+      trade_in_ids = trade_in_ids,
+      future_roster = future_roster,
+      notes = notes
+    )
+  })
+
+  planner_cvc_recommendations <- reactive({
+    bundle <- planner_future_bundle()
+    recommend_planner_cvc_combos(bundle$future_roster, n = 5L)
+  })
+
+  observe({
+    recs <- planner_cvc_recommendations()
+    choices <- c("Auto-select top combo" = "")
+    selected <- isolate(input$planner_cvc_choice %||% "")
+    if (!is.null(recs) && nrow(recs)) {
+      combo_values <- paste(recs$vc_player_id, recs$captain_player_id, sep = "::")
+      choices <- c(
+        choices,
+        setNames(combo_values, recs$combo_label)
+      )
+      if (!selected %in% choices) {
+        selected <- combo_values[[1]]
+      }
+    } else {
+      selected <- ""
+    }
+    updateSelectizeInput(session, "planner_cvc_choice", choices = choices, selected = selected, server = TRUE)
+  })
+
+  planner_bundle <- eventReactive(input$planner_generate, {
+    planner_seed <- planner_future_bundle()
+    current_roster <- planner_seed$current_roster
+    future_market <- planner_seed$future_market
+    trades <- planner_seed$trades
+    slots <- slot_template_from_game_rules(dashboard_data()$game_rules)
+    notes <- planner_seed$notes
+    trades_complete <- planner_seed$trades_complete
+    trade_out_ids <- planner_seed$trade_out_ids
+    trade_in_ids <- planner_seed$trade_in_ids
+    future_roster <- planner_seed$future_roster
 
     final_assign <- solve_best_lineup(future_roster, slots, "real_score")
     req(!is.null(final_assign), nrow(final_assign) > 0)
@@ -2542,6 +2724,34 @@ server <- function(input, output, session) {
     pre_reserves <- choose_planner_reserves(current_roster, pre_assign$player_id, current_target_ids)
     post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids)
 
+    cvc_recs <- planner_cvc_recommendations()
+    selected_combo <- as.character(input$planner_cvc_choice %||% "")
+    if (!nzchar(selected_combo) && !is.null(cvc_recs) && nrow(cvc_recs)) {
+      selected_combo <- paste(cvc_recs$vc_player_id[[1]], cvc_recs$captain_player_id[[1]], sep = "::")
+    }
+
+    combo_parts <- strsplit(selected_combo, "::", fixed = TRUE)[[1]]
+    real_vc_id <- if (length(combo_parts) >= 1 && nzchar(combo_parts[[1]])) suppressWarnings(as.integer(combo_parts[[1]])) else NA_integer_
+    real_captain_id <- if (length(combo_parts) >= 2 && nzchar(combo_parts[[2]])) suppressWarnings(as.integer(combo_parts[[2]])) else NA_integer_
+
+    if (is.na(real_vc_id) || !real_vc_id %in% final_ids) {
+      real_vc_id <- if (!is.null(cvc_recs) && nrow(cvc_recs)) cvc_recs$vc_player_id[[1]] else NA_integer_
+    }
+    if (is.na(real_captain_id) || !real_captain_id %in% final_ids || identical(real_captain_id, real_vc_id)) {
+      real_captain_id <- if (!is.null(cvc_recs) && nrow(cvc_recs)) cvc_recs$captain_player_id[[1]] else setdiff(final_ids, real_vc_id)[[1]]
+    }
+
+    bogus_cvc <- choose_bogus_captaincy(
+      pre_assign = pre_assign,
+      roster = current_roster,
+      real_vc_id = real_vc_id,
+      real_c_id = real_captain_id
+    )
+    bogus_vc_id <- bogus_cvc$vc_id
+    bogus_captain_id <- bogus_cvc$captain_id
+    state_vc_id <- bogus_cvc$vc_id
+    state_captain_id <- bogus_cvc$captain_id
+
     player_lookup <- c(
       setNames(current_roster$player, as.character(current_roster$player_id)),
       setNames(future_roster$player, as.character(future_roster$player_id))
@@ -2594,6 +2804,7 @@ server <- function(input, output, session) {
         When = format_planner_time(trade_deadline),
         `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
         Move = trade_text,
+        `Captaincy Change` = "No captaincy change",
         `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
         Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
         stringsAsFactors = FALSE,
@@ -2649,6 +2860,16 @@ server <- function(input, output, session) {
       move_text <- describe_slot_changes(state_assign, batch_assign, player_lookup)
       carried_reserves <- carry_reserves_from_swaps(state_reserves, bench_pairs, batch_assign$player_id)
       next_reserves <- choose_planner_reserves(state_roster, batch_assign$player_id, final_ids)
+      captaincy_actions <- character()
+
+      if (!is.na(real_vc_id) && real_vc_id %in% group_tbl$player_id && !identical(state_vc_id, real_vc_id)) {
+        captaincy_actions <- c(captaincy_actions, paste0("Set VC to ", player_lookup[as.character(real_vc_id)]))
+        state_vc_id <- real_vc_id
+      }
+      if (!is.na(real_captain_id) && real_captain_id %in% group_tbl$player_id && !identical(state_captain_id, real_captain_id)) {
+        captaincy_actions <- c(captaincy_actions, paste0("Set C to ", player_lookup[as.character(real_captain_id)]))
+        state_captain_id <- real_captain_id
+      }
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
@@ -2657,6 +2878,7 @@ server <- function(input, output, session) {
         When = format_planner_time(kickoff_value - 10 * 60),
         `Players Locking` = describe_locking_players(state_roster, kickoff_value),
         Move = move_text,
+        `Captaincy Change` = if (length(captaincy_actions)) paste(captaincy_actions, collapse = " | ") else "No captaincy change",
         `Reserve Change` = describe_reserve_transition(carried_reserves, next_reserves, player_lookup),
         Why = if (!is.na(kickoff_value)) {
           paste0(
@@ -2695,6 +2917,11 @@ server <- function(input, output, session) {
           Placement = slot,
           Player = player,
           Team = team_abbrev,
+          Captaincy = case_when(
+            player_id == bogus_captain_id ~ "Bogus C",
+            player_id == bogus_vc_id ~ "Bogus VC",
+            TRUE ~ ""
+          ),
           `Reserve ON` = if_else(player_id %in% pre_reserves, "Yes", "No"),
           `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
           `Bogus Score` = round(bogus_value, 1),
@@ -2711,6 +2938,11 @@ server <- function(input, output, session) {
           Placement = "Bench",
           Player = player,
           Team = team_abbrev,
+          Captaincy = case_when(
+            player_id == bogus_captain_id ~ "Bogus C",
+            player_id == bogus_vc_id ~ "Bogus VC",
+            TRUE ~ ""
+          ),
           `Reserve ON` = if_else(player_id %in% pre_reserves, "Yes", "No"),
           `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
           `Bogus Score` = round(bogus_value, 1),
@@ -2732,6 +2964,11 @@ server <- function(input, output, session) {
         Slot = slot,
         Player = player,
         Team = team_abbrev,
+        Captaincy = case_when(
+          player_id == real_captain_id ~ "C",
+          player_id == real_vc_id ~ "VC",
+          TRUE ~ ""
+        ),
         `Next Opp` = next_opponent,
         `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
         `Real Score` = round(real_score, 1),
@@ -2748,6 +2985,16 @@ server <- function(input, output, session) {
     status_lines <- c(
       paste0("Real team is optimised for ", nrow(final_setup), " active scorers plus 4 rotating reserves."),
       if (nrow(trades_complete)) paste0("Selected trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | ")) else "Selected trades: no trade.",
+      if (!is.na(real_vc_id) || !is.na(real_captain_id)) {
+        paste0(
+          "Selected VC/C: ",
+          player_lookup[as.character(real_vc_id)] %||% "Unavailable",
+          " / ",
+          player_lookup[as.character(real_captain_id)] %||% "Unavailable"
+        )
+      } else {
+        "Selected VC/C: unavailable."
+      },
       if (!is.na(trade_deadline)) paste0("Latest trade window: ", format_planner_time(trade_deadline)) else "Latest trade window: no trade timing constraint detected."
     )
 
@@ -2760,6 +3007,11 @@ server <- function(input, output, session) {
         group_by(sort_at_utc, `Lock Window`, When, `Players Locking`) %>%
         summarise(
           Move = paste(unique(Move), collapse = " | "),
+          `Captaincy Change` = {
+            values <- unique(`Captaincy Change`)
+            values <- values[nzchar(values) & values != "No captaincy change"]
+            if (length(values)) paste(values, collapse = " | ") else "No captaincy change"
+          },
           `Reserve Change` = {
             values <- unique(`Reserve Change`)
             values <- values[nzchar(values) & values != "No reserve change"]
@@ -2776,6 +3028,7 @@ server <- function(input, output, session) {
           When,
           `Players Locking`,
           Move,
+          `Captaincy Change`,
           `Reserve Change`,
           Why
         )
@@ -3733,6 +3986,25 @@ server <- function(input, output, session) {
   output$planner_status_text <- safe_text({
     planner_bundle()$status_text
   }, fallback = "Choose up to three trades, then click Generate Plan.")
+
+  output$planner_cvc_table <- safe_table({
+    recs <- planner_cvc_recommendations()
+    if (is.null(recs) || !nrow(recs)) {
+      data.frame(Status = "No captain / VC recommendations available for the current trade setup.", check.names = FALSE)
+    } else {
+      recs %>%
+        transmute(
+          Rank = recommendation,
+          VC = `VC`,
+          `VC Kickoff` = `VC Kickoff`,
+          Captain = Captain,
+          `Captain Kickoff` = `Captain Kickoff`,
+          `VC Score` = `VC Score`,
+          `Captain Score` = `Captain Score`,
+          Why = `Why This Combo`
+        )
+    }
+  }, fallback = data.frame(Status = "Choose your trade setup to load captain / VC recommendations.", check.names = FALSE))
 
   output$planner_start_table <- safe_table({
     planner_bundle()$starting_setup
