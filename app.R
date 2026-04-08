@@ -1443,9 +1443,6 @@ planner_lock_step_assignment <- function(players, slots, current_assign, current
       mutate(
         slot_base = vapply(slot, slot_base_from_slot_name, character(1))
       ) %>%
-      filter(vapply(slot_base, function(one_slot) {
-        planner_slot_eligible(incoming_row$eligibility[[1]], one_slot)
-      }, logical(1))) %>%
       left_join(
         roster_lookup %>%
           rename(
@@ -1458,13 +1455,18 @@ planner_lock_step_assignment <- function(players, slots, current_assign, current
         by = c("player_id" = "current_player_id")
       ) %>%
       mutate(
+        current_locked = !is.na(current_kickoff_utc) & !is.na(current_kickoff) & current_kickoff_utc < current_kickoff
+      ) %>%
+      filter(!current_locked) %>%
+      filter(vapply(slot_base, function(one_slot) {
+        planner_slot_eligible(incoming_row$eligibility[[1]], one_slot)
+      }, logical(1))) %>%
+      mutate(
         current_is_required = player_id %in% required_ids,
         current_is_target = player_id %in% target_ids,
-        current_locked = !is.na(current_kickoff_utc) & !is.na(current_kickoff) & current_kickoff_utc <= current_kickoff,
         replacement_priority = case_when(
           current_is_required ~ -1e9,
-          !current_is_target & !current_locked ~ 6000,
-          !current_is_target & current_locked ~ 3000,
+          !current_is_target ~ 6000,
           current_is_target & !current_locked ~ -2000,
           TRUE ~ -5000
         ) +
@@ -1495,7 +1497,14 @@ format_planner_time <- function(x, fallback = "Before first relevant lock") {
     if (is.na(one_x)) {
       return(fallback)
     }
-    formatted <- format(as.POSIXct(one_x, tz = "UTC"), "%a %I:%M %p %Z", tz = "Australia/Sydney")
+    one_time <- if (inherits(one_x, c("POSIXct", "POSIXt"))) {
+      as.POSIXct(one_x, tz = "UTC")
+    } else if (is.numeric(one_x)) {
+      as.POSIXct(one_x, origin = "1970-01-01", tz = "UTC")
+    } else {
+      as.POSIXct(one_x, tz = "UTC")
+    }
+    formatted <- format(one_time, "%a %I:%M %p %Z", tz = "Australia/Sydney")
     sub(" 0", " ", formatted, fixed = TRUE)
   }, character(1))
 }
@@ -3396,7 +3405,9 @@ server <- function(input, output, session) {
         )
     )
 
-    final_active_setup <- final_assign %>%
+    final_assign_reachable <- state_assign
+
+    final_active_setup <- final_assign_reachable %>%
       left_join(
         future_roster %>%
           select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, risk_band, bye_this_round, recent_average, matchup_rating),
@@ -3426,13 +3437,13 @@ server <- function(input, output, session) {
 
     final_reserve_ids <- choose_planner_reserves(
       future_roster,
-      final_assign$player_id,
-      final_ids,
+      final_assign_reachable$player_id,
+      final_assign_reachable$player_id,
       current_reserves = state_reserves
     )
     final_bench <- build_planner_bench_state(
       players = future_roster,
-      field_ids = final_assign$player_id,
+      field_ids = final_assign_reachable$player_id,
       reserve_ids = final_reserve_ids,
       current_bench_ids = state_bench_ids
     )
