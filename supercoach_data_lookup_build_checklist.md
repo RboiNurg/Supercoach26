@@ -349,6 +349,7 @@ These are non-negotiable rules. If any are broken, the plan is wrong.
 #### 10.5 Reserve legality
 
 - there can only ever be 4 reserve scorers
+- the 4 reserve scorers must be the highest projected scoring bench options available in the final reachable state
 - if a reserve-carrying player is swapped to field, reserve ownership travels to the bench player replacing him until explicitly changed
 - reserve changes must be shown in the schedule
 
@@ -369,6 +370,14 @@ These are non-negotiable rules. If any are broken, the plan is wrong.
 
 - user must be able to read the schedule top to bottom without guessing
 - no row may imply hidden reshuffles outside what is printed
+
+#### 10.9 Reachable final-state logic
+
+- the planner must not optimise against an ideal end-state that later becomes unreachable
+- before each lock window, it must recompute the best reachable final side using:
+  - already locked field players fixed in place
+  - already locked bench players excluded from future field slots
+- if a Friday player is still on field when Friday locks, every later target state must respect that
 
 ### Specific failure examples to guard against
 
@@ -432,6 +441,7 @@ The planner is only complete when all items below are true.
 - bogus starting setup shows bogus captain and bogus VC
 - exact move schedule is one row per lock window
 - every schedule row uses the previous row's resulting state
+- every schedule row targets the best reachable final state from that moment, not a stale ideal state
 - no row moves already-locked players
 - no row contains a vague `player -> bench` instruction
 - every swap shows both source and destination

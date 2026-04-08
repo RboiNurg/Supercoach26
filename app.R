@@ -442,6 +442,29 @@ latest_projection_lookup <- function(squad_round_enriched, team_ids = NULL) {
     )
 }
 
+planner_projection_lookup <- function(squad_round_enriched) {
+  projection_lookup <- latest_projection_lookup(squad_round_enriched)
+  if (is.null(projection_lookup) || !nrow(projection_lookup)) {
+    return(NULL)
+  }
+
+  projection_lookup %>%
+    group_by(player_id) %>%
+    summarise(
+      projected_score_this_week_lookup = if (all(is.na(projected_score_this_week_fallback))) {
+        NA_real_
+      } else {
+        max(projected_score_this_week_fallback, na.rm = TRUE)
+      },
+      projected_score_next_3_weeks_lookup = if (all(is.na(projected_score_next_3_weeks_fallback))) {
+        NA_real_
+      } else {
+        max(projected_score_next_3_weeks_fallback, na.rm = TRUE)
+      },
+      .groups = "drop"
+    )
+}
+
 team_lookup_from_ladder <- function(ladder_history) {
   if (is.null(ladder_history) || !nrow(ladder_history)) {
     return(NULL)
@@ -678,6 +701,18 @@ next_team_fixture_lookup <- function(
           upcoming_round = round,
           home_away,
           bye_flag,
+          days_rest,
+          travel_burden,
+          short_turnaround_flag,
+          opponent_recent_form,
+          team_recent_form,
+          projected_game_total,
+          projected_team_scoring_environment,
+          opponent_defensive_weakness_by_position,
+          opponent_attacking_weakness_by_position,
+          team_style_indicator,
+          major_outs_opponent,
+          major_outs_team,
           next_matchup_rating = matchup_rating_by_player,
           next_matchup_rating_team = matchup_rating_by_team,
           next_3_rounds_difficulty,
@@ -1026,6 +1061,44 @@ solve_best_lineup <- function(players, slots, value_col) {
     )
 }
 
+solve_best_lineup_constrained <- function(players, slots, value_col, fixed_assign = NULL, excluded_ids = integer()) {
+  if (is.null(players) || !nrow(players) || is.null(slots) || !nrow(slots)) {
+    return(NULL)
+  }
+
+  fixed_assign <- fixed_assign %||% tibble::tibble()
+  excluded_ids <- unique(excluded_ids %||% integer())
+
+  fixed_slots <- intersect(fixed_assign$slot %||% character(), slots$slot)
+  fixed_part <- fixed_assign %>%
+    filter(slot %in% fixed_slots) %>%
+    select(slot, player_id, player)
+
+  remaining_slots <- slots %>%
+    filter(!slot %in% fixed_slots)
+
+  if (!nrow(remaining_slots)) {
+    return(
+      fixed_part %>%
+        arrange(match(slot, slots$slot))
+    )
+  }
+
+  available_players <- players %>%
+    filter(!player_id %in% excluded_ids, !player_id %in% fixed_part$player_id)
+
+  remaining_assign <- solve_best_lineup(available_players, remaining_slots, value_col)
+  if (is.null(remaining_assign) || !nrow(remaining_assign)) {
+    if (nrow(fixed_part)) {
+      return(fixed_part %>% arrange(match(slot, slots$slot)))
+    }
+    return(NULL)
+  }
+
+  bind_rows(fixed_part, remaining_assign) %>%
+    arrange(match(slot, slots$slot))
+}
+
 choose_planner_reserves <- function(players, field_ids, final_ids, current_reserves = integer(), n_reserves = 4L) {
   if (is.null(players) || !nrow(players)) {
     return(integer())
@@ -1034,7 +1107,6 @@ choose_planner_reserves <- function(players, field_ids, final_ids, current_reser
   bench <- players %>%
     filter(!player_id %in% field_ids) %>%
     mutate(
-      carried_reserve = player_id %in% (current_reserves %||% integer()),
       final_target = player_id %in% final_ids,
       kickoff_rank = if_else(
         is.na(next_kickoff_utc),
@@ -1042,7 +1114,7 @@ choose_planner_reserves <- function(players, field_ids, final_ids, current_reser
         as.numeric(as.POSIXct(next_kickoff_utc, tz = "UTC"))
       )
     ) %>%
-    arrange(desc(carried_reserve), desc(final_target), kickoff_rank, desc(real_score), desc(bogus_value))
+    arrange(desc(real_score), desc(final_target), kickoff_rank, desc(bogus_value), player)
 
   head(bench$player_id, n_reserves)
 }
@@ -1809,6 +1881,47 @@ planner_force_slots_to_target <- function(current_assign, current_bench_ids, tar
   list(assign = updated_assign, bench_ids = current_bench)
 }
 
+planner_locked_state <- function(roster, current_assign, current_bench_ids, before_kickoff_utc) {
+  if (is.null(roster) || !nrow(roster) || is.null(current_assign) || !nrow(current_assign)) {
+    return(list(locked_field = tibble::tibble(), locked_bench_ids = integer()))
+  }
+
+  roster_times <- roster %>%
+    select(player_id, next_kickoff_utc)
+
+  locked_field <- current_assign %>%
+    left_join(roster_times, by = "player_id") %>%
+    filter(!is.na(next_kickoff_utc), next_kickoff_utc < before_kickoff_utc) %>%
+    select(slot, player_id, player)
+
+  locked_bench_ids <- tibble::tibble(player_id = current_bench_ids %||% integer()) %>%
+    left_join(roster_times, by = "player_id") %>%
+    filter(!is.na(next_kickoff_utc), next_kickoff_utc < before_kickoff_utc) %>%
+    pull(player_id)
+
+  list(
+    locked_field = locked_field,
+    locked_bench_ids = locked_bench_ids
+  )
+}
+
+planner_reachable_target <- function(roster, slots, current_assign, current_bench_ids, before_kickoff_utc) {
+  locked_state <- planner_locked_state(
+    roster = roster,
+    current_assign = current_assign,
+    current_bench_ids = current_bench_ids,
+    before_kickoff_utc = before_kickoff_utc
+  )
+
+  solve_best_lineup_constrained(
+    players = roster,
+    slots = slots,
+    value_col = "real_score",
+    fixed_assign = locked_state$locked_field,
+    excluded_ids = locked_state$locked_bench_ids
+  )
+}
+
 prepare_planner_roster <- function(
   base_players,
   master_player,
@@ -1817,6 +1930,7 @@ prepare_planner_roster <- function(
   zero_tackle_tbl,
   next_fixture_lookup,
   team_performance,
+  projection_lookup = NULL,
   current_round,
   now = Sys.time()
 ) {
@@ -1835,6 +1949,7 @@ prepare_planner_roster <- function(
   }
 
   attack_lookup <- NULL
+  opponent_defense_lookup <- NULL
   if (!is.null(team_performance) && nrow(team_performance)) {
     attack_lookup <- team_performance %>%
       filter(!is.na(attacking_trend_last_3)) %>%
@@ -1843,7 +1958,31 @@ prepare_planner_roster <- function(
       slice_head(n = 1) %>%
       ungroup() %>%
       transmute(team_abbrev, attacking_trend_last_3)
+
+    opponent_defense_lookup <- team_performance %>%
+      filter(!is.na(defensive_trend_last_3)) %>%
+      arrange(desc(round), desc(run_ts)) %>%
+      group_by(team_abbrev) %>%
+      slice_head(n = 1) %>%
+      ungroup() %>%
+      transmute(
+        next_opponent = team_abbrev,
+        opponent_defensive_trend_last_3 = defensive_trend_last_3,
+        opponent_defensive_trend_last_5 = defensive_trend_last_5
+      )
   }
+
+  attack_lookup <- attack_lookup %||% tibble::tibble(team_abbrev = character(), attacking_trend_last_3 = numeric())
+  opponent_defense_lookup <- opponent_defense_lookup %||% tibble::tibble(
+    next_opponent = character(),
+    opponent_defensive_trend_last_3 = numeric(),
+    opponent_defensive_trend_last_5 = numeric()
+  )
+  projection_lookup <- projection_lookup %||% tibble::tibble(
+    player_id = integer(),
+    projected_score_this_week_lookup = numeric(),
+    projected_score_next_3_weeks_lookup = numeric()
+  )
 
   base_players %>%
     left_join(
@@ -1908,6 +2047,8 @@ prepare_planner_roster <- function(
     ) %>%
     left_join(next_fixture_lookup, by = "team_abbrev") %>%
     left_join(attack_lookup, by = "team_abbrev") %>%
+    left_join(opponent_defense_lookup, by = "next_opponent") %>%
+    left_join(projection_lookup, by = "player_id") %>%
     mutate(
       eligibility = lapply(seq_len(n()), function(i) planner_player_eligibility(positions_string[[i]], current_position[[i]])),
       next_kickoff_utc = as.POSIXct(next_kickoff_utc, tz = "UTC"),
@@ -1915,9 +2056,48 @@ prepare_planner_roster <- function(
       risk_band = coalesce(zero_tackle_risk_band, availability_risk_band, "low"),
       injury_text = coalesce(zero_tackle_status_text, injury_suspension_status_text, injury_detail, master_status),
       expected_return = coalesce(zero_tackle_expected_return, availability_expected_return, master_expected_return),
-      recent_average = coalesce(average_3_round, current_season_average, 0),
+      primary_position = case_when(
+        grepl("FLB|HFB|5/8|HOK", coalesce(positions_string, "")) ~ "spine",
+        grepl("CTW", coalesce(positions_string, "")) ~ "edge",
+        grepl("FRF|2RF", coalesce(positions_string, "")) ~ "middle",
+        TRUE ~ "utility"
+      ),
+      recent_average = coalesce(projected_score_this_week_lookup, average_3_round, current_season_average, 0),
+      form_baseline = coalesce(average_5_round, current_season_average, recent_average, 0),
+      form_delta = coalesce(average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
       matchup_rating = coalesce(next_matchup_rating, next_matchup_rating_team, 24),
       attack_trend = coalesce(attacking_trend_last_3, 0),
+      opponent_defense_bonus = pmax(coalesce(opponent_defensive_trend_last_3, 18) - 18, 0),
+      home_bonus = case_when(
+        home_away == "home" ~ 3.5,
+        home_away == "away" ~ -1.5,
+        TRUE ~ 0
+      ),
+      rest_bonus = case_when(
+        short_turnaround_flag %in% TRUE ~ -4,
+        !is.na(days_rest) & days_rest >= 8 ~ 2,
+        !is.na(days_rest) & days_rest < 6 ~ -1.5,
+        TRUE ~ 0
+      ),
+      travel_penalty = case_when(
+        travel_burden == "high" ~ 3,
+        travel_burden == "medium" ~ 1.5,
+        travel_burden == "low" ~ 0.5,
+        TRUE ~ 0
+      ),
+      environment_bonus = coalesce(projected_team_scoring_environment, matchup_rating, 24) - 24,
+      form_context_bonus = coalesce(team_recent_form, 0.5) * 6 - coalesce(opponent_recent_form, 0.5) * 4,
+      schedule_bonus = case_when(
+        schedule_swing_indicator == "easier_short_term" ~ 3,
+        schedule_swing_indicator == "harder_short_term" ~ -3,
+        TRUE ~ 0
+      ),
+      position_environment_bonus = case_when(
+        primary_position == "spine" ~ environment_bonus * 0.45 + attack_trend * 0.20 + opponent_defense_bonus * 0.20,
+        primary_position == "edge" ~ environment_bonus * 0.35 + attack_trend * 0.12 + opponent_defense_bonus * 0.25,
+        primary_position == "middle" ~ environment_bonus * 0.18 + opponent_defense_bonus * 0.28 + pmax(coalesce(days_rest, 6) - 6, 0) * 0.7,
+        TRUE ~ environment_bonus * 0.22 + attack_trend * 0.10
+      ),
       goal_bonus = if_else(grepl("goal|kicker|primary", tolower(coalesce(goal_kicking_status, ""))), 4, 0),
       starting_bonus = if_else(grepl("start", tolower(coalesce(starting_status, ""))), 3, 0),
       risk_penalty = case_when(
@@ -1928,9 +2108,16 @@ prepare_planner_roster <- function(
       inactive_penalty = if_else(active_flag %in% FALSE, 18, 0),
       bye_penalty = if_else(bye_this_round, 12, 0),
       locked_now = !is.na(next_kickoff_utc) & as.POSIXct(now, tz = "UTC") >= next_kickoff_utc,
-      real_score = recent_average +
-        matchup_rating / 3 +
-        pmax(attack_trend, 0) / 10 +
+      real_score = recent_average * 0.62 +
+        coalesce(form_baseline, 0) * 0.18 +
+        pmax(form_delta, -18) * 0.35 +
+        matchup_rating * 0.32 +
+        position_environment_bonus +
+        home_bonus +
+        rest_bonus -
+        travel_penalty +
+        form_context_bonus +
+        schedule_bonus +
         goal_bonus +
         starting_bonus -
         risk_penalty -
@@ -2920,6 +3107,7 @@ server <- function(input, output, session) {
 
   planner_market_pool <- reactive({
     data <- dashboard_data()
+    projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
 
     prepare_planner_roster(
       base_players = data$master_player %>%
@@ -2935,6 +3123,7 @@ server <- function(input, output, session) {
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
       team_performance = data$team_performance,
+      projection_lookup = projection_lookup,
       current_round = current_round()
     )
   })
@@ -2942,6 +3131,7 @@ server <- function(input, output, session) {
   current_planner_roster <- reactive({
     data <- dashboard_data()
     context <- planner_context()
+    projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
     req(!is.na(context$my_team_id))
 
     snapshot <- latest_team_players_snapshot(data$team_players_latest, context$my_team_id)
@@ -2955,6 +3145,7 @@ server <- function(input, output, session) {
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
       team_performance = data$team_performance,
+      projection_lookup = projection_lookup,
       current_round = current_round()
     )
   })
@@ -3132,10 +3323,10 @@ server <- function(input, output, session) {
     trade_in_ids <- planner_seed$trade_in_ids
     future_roster <- planner_seed$future_roster
 
-    final_assign <- solve_best_lineup(future_roster, slots, "real_score")
-    req(!is.null(final_assign), nrow(final_assign) > 0)
+    ideal_final_assign <- solve_best_lineup(future_roster, slots, "real_score")
+    req(!is.null(ideal_final_assign), nrow(ideal_final_assign) > 0)
 
-    final_ids <- final_assign$player_id
+    final_ids <- ideal_final_assign$player_id
     kickoff_candidates <- future_roster$next_kickoff_utc[!is.na(future_roster$next_kickoff_utc)]
     first_kickoff <- if (length(kickoff_candidates)) min(kickoff_candidates) else as.POSIXct(NA, tz = "UTC")
 
@@ -3313,19 +3504,27 @@ server <- function(input, output, session) {
       state_roster <- future_roster
     }
 
-    final_plan <- final_assign %>%
-      left_join(
-        future_roster %>%
-          select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, risk_band, bye_this_round),
-        by = "player_id"
-      ) %>%
-      arrange(coalesce(next_kickoff_utc, as.POSIXct("2100-01-01", tz = "UTC")), desc(real_score))
+    lock_windows <- future_roster %>%
+      filter(!is.na(next_kickoff_utc)) %>%
+      arrange(next_kickoff_utc, desc(real_score), player)
 
-    final_plan_groups <- split(final_plan, as.character(final_plan$next_kickoff_utc))
+    final_plan_groups <- split(lock_windows, as.character(lock_windows$next_kickoff_utc))
 
     for (group_name in names(final_plan_groups)) {
       group_tbl <- final_plan_groups[[group_name]]
       kickoff_value <- group_tbl$next_kickoff_utc[[1]]
+
+      reachable_assign <- planner_reachable_target(
+        roster = state_roster,
+        slots = slots,
+        current_assign = state_assign,
+        current_bench_ids = state_bench_ids,
+        before_kickoff_utc = kickoff_value
+      )
+
+      if (is.null(reachable_assign) || !nrow(reachable_assign)) {
+        next
+      }
 
       current_with_times <- state_assign %>%
         left_join(
@@ -3333,9 +3532,9 @@ server <- function(input, output, session) {
             select(player_id, next_kickoff_utc),
           by = "player_id"
         ) %>%
-        mutate(target_player_id = final_assign$player_id[match(slot, final_assign$slot)])
+        mutate(target_player_id = reachable_assign$player_id[match(slot, reachable_assign$slot)])
 
-      target_slots_due_now <- final_assign %>%
+      target_slots_due_now <- reachable_assign %>%
         left_join(
           state_roster %>%
             select(player_id, next_kickoff_utc),
@@ -3357,7 +3556,7 @@ server <- function(input, output, session) {
       forced_state <- planner_force_slots_to_target(
         current_assign = state_assign,
         current_bench_ids = state_bench_ids,
-        target_assign = final_assign,
+        target_assign = reachable_assign,
         target_slots = target_slots
       )
 
