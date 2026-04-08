@@ -832,6 +832,443 @@ latest_round_at_or_before <- function(tbl, round_limit) {
   max(rounds)
 }
 
+default_slot_template <- function() {
+  data.frame(
+    slot = c("HOK", "FRF1", "FRF2", "2RF1", "2RF2", "2RF3", "HFB", "5/8", "CTW1", "CTW2", "CTW3", "CTW4", "FLB", "FLX"),
+    slot_base = c("HOK", "FRF", "FRF", "2RF", "2RF", "2RF", "HFB", "5/8", "CTW", "CTW", "CTW", "CTW", "FLB", "FLX"),
+    stringsAsFactors = FALSE
+  )
+}
+
+slot_template_from_game_rules <- function(game_rules) {
+  if (is.null(game_rules) || !nrow(game_rules) || !"position_rules" %in% names(game_rules)) {
+    return(default_slot_template())
+  }
+
+  rules <- game_rules$position_rules[[1]]
+  if (is.null(rules) || !nrow(rules) || !all(c("position_id", "active_max_players") %in% names(rules))) {
+    return(default_slot_template())
+  }
+
+  rules <- rules %>%
+    filter(active_max_players > 0) %>%
+    arrange(position_sort)
+
+  expanded <- bind_rows(lapply(seq_len(nrow(rules)), function(i) {
+    one_rule <- rules[i, ]
+    n_slots <- suppressWarnings(as.integer(one_rule$active_max_players[[1]]))
+    if (is.na(n_slots) || n_slots <= 0) {
+      return(NULL)
+    }
+
+    data.frame(
+      slot = if (n_slots == 1) one_rule$position_id[[1]] else paste0(one_rule$position_id[[1]], seq_len(n_slots)),
+      slot_base = rep(one_rule$position_id[[1]], n_slots),
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  if (is.null(expanded) || !nrow(expanded)) {
+    default_slot_template()
+  } else {
+    expanded
+  }
+}
+
+split_position_tokens <- function(x) {
+  if (is.null(x) || length(x) == 0 || all(is.na(x))) {
+    return(character())
+  }
+
+  raw_value <- as.character(x[[1]])
+  raw_value <- gsub("5/8", "FIVEEIGHT", raw_value, fixed = TRUE)
+
+  tokens <- trimws(unlist(strsplit(raw_value, "/", fixed = TRUE)))
+  tokens <- tokens[nzchar(tokens)]
+  if (!length(tokens)) {
+    return(character())
+  }
+
+  tokens <- toupper(tokens)
+  tokens[tokens %in% c("FIVEEIGHT", "FIVEEIGHTH")] <- "5/8"
+  tokens[tokens %in% c("HOOKER")] <- "HOK"
+  tokens[tokens %in% c("FRONT ROW", "FRONTROW")] <- "FRF"
+  tokens[tokens %in% c("2ND ROW FORWARD", "SECOND ROW", "2ND ROW")] <- "2RF"
+  tokens[tokens %in% c("HALFBACK", "HB")] <- "HFB"
+  tokens[tokens %in% c("FIVE EIGHTH", "FIVE-EIGHTH", "5-8")] <- "5/8"
+  tokens[tokens %in% c("WING/CENTRE", "WING", "CENTRE")] <- "CTW"
+  tokens[tokens %in% c("FULLBACK", "FB")] <- "FLB"
+  tokens[tokens %in% c("FLEX")] <- "FLX"
+  unique(tokens)
+}
+
+planner_player_eligibility <- function(positions_string = NA_character_, fallback_position = NA_character_) {
+  tokens <- unique(c(split_position_tokens(positions_string), split_position_tokens(fallback_position)))
+  tokens[nzchar(tokens)]
+}
+
+planner_slot_eligible <- function(eligibility_tokens, slot_base) {
+  if (slot_base == "FLX") {
+    return(TRUE)
+  }
+  slot_base %in% eligibility_tokens
+}
+
+solve_best_lineup <- function(players, slots, value_col) {
+  if (is.null(players) || !nrow(players) || is.null(slots) || !nrow(slots) || !value_col %in% names(players)) {
+    return(NULL)
+  }
+
+  working <- players
+  values <- suppressWarnings(as.numeric(working[[value_col]]))
+  values[is.na(values)] <- -1e6
+  working$planner_value <- values
+
+  eligibility_map_full <- lapply(slots$slot_base, function(one_slot) {
+    which(vapply(working$eligibility, planner_slot_eligible, logical(1), slot_base = one_slot))
+  })
+
+  if (any(lengths(eligibility_map_full) == 0)) {
+    return(NULL)
+  }
+
+  candidate_limit_map <- c(HOK = 3L, FRF = 5L, `2RF` = 6L, HFB = 3L, `5/8` = 3L, CTW = 6L, FLB = 3L, FLX = 8L)
+  top_overall_n <- min(nrow(working), nrow(slots) + 6L)
+  candidate_rows <- order(working$planner_value, decreasing = TRUE)[seq_len(top_overall_n)]
+
+  for (i in seq_along(eligibility_map_full)) {
+    slot_base <- slots$slot_base[[i]]
+    slot_limit <- candidate_limit_map[[slot_base]] %||% 4L
+    candidate_rows <- unique(c(
+      candidate_rows,
+      head(
+        eligibility_map_full[[i]][order(working$planner_value[eligibility_map_full[[i]]], decreasing = TRUE)],
+        slot_limit
+      )
+    ))
+  }
+
+  candidate_rows <- sort(unique(candidate_rows))
+  if (length(candidate_rows) < nrow(slots)) {
+    candidate_rows <- seq_len(nrow(working))
+  }
+
+  reduced <- working[candidate_rows, , drop = FALSE]
+  reduced$source_row <- candidate_rows
+
+  row_lookup <- setNames(seq_along(candidate_rows), candidate_rows)
+  eligibility_map <- lapply(eligibility_map_full, function(one_map) {
+    mapped <- unname(row_lookup[as.character(intersect(one_map, candidate_rows))])
+    mapped[!is.na(mapped)]
+  })
+
+  if (any(lengths(eligibility_map) == 0)) {
+    reduced <- working
+    reduced$source_row <- seq_len(nrow(working))
+    eligibility_map <- eligibility_map_full
+  }
+
+  slot_order <- order(lengths(eligibility_map), ifelse(slots$slot_base == "FLX", 1L, 0L))
+  best_score <- -Inf
+  best_assignment <- rep(NA_integer_, nrow(slots))
+
+  recurse <- function(depth, available_rows, assignment, current_score) {
+    if (depth > length(slot_order)) {
+      if (current_score > best_score) {
+        best_score <<- current_score
+        best_assignment <<- assignment
+      }
+      return(invisible(NULL))
+    }
+
+    remaining_slots <- length(slot_order) - depth + 1
+    if (!length(available_rows) || length(available_rows) < remaining_slots) {
+      return(invisible(NULL))
+    }
+
+    optimistic <- current_score + sum(sort(reduced$planner_value[available_rows], decreasing = TRUE)[seq_len(remaining_slots)])
+    if (optimistic <= best_score) {
+      return(invisible(NULL))
+    }
+
+    slot_idx <- slot_order[[depth]]
+    candidates <- intersect(eligibility_map[[slot_idx]], available_rows)
+    if (!length(candidates)) {
+      return(invisible(NULL))
+    }
+
+    candidates <- candidates[order(working$planner_value[candidates], decreasing = TRUE)]
+
+    for (candidate in candidates) {
+      new_assignment <- assignment
+      new_assignment[[slot_idx]] <- candidate
+      recurse(
+        depth + 1L,
+        setdiff(available_rows, candidate),
+        new_assignment,
+        current_score + reduced$planner_value[[candidate]]
+      )
+    }
+  }
+
+  recurse(1L, seq_len(nrow(reduced)), rep(NA_integer_, nrow(slots)), 0)
+
+  if (!is.finite(best_score) || any(is.na(best_assignment))) {
+    return(NULL)
+  }
+
+  slots %>%
+    mutate(
+      player_row = best_assignment,
+      source_row = reduced$source_row[player_row],
+      player_id = reduced$player_id[player_row],
+      player = reduced$player[player_row]
+    )
+}
+
+choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 4L) {
+  if (is.null(players) || !nrow(players)) {
+    return(integer())
+  }
+
+  bench <- players %>%
+    filter(!player_id %in% field_ids) %>%
+    mutate(
+      final_target = player_id %in% final_ids,
+      kickoff_rank = if_else(
+        is.na(next_kickoff_utc),
+        Inf,
+        as.numeric(as.POSIXct(next_kickoff_utc, tz = "UTC"))
+      )
+    ) %>%
+    arrange(desc(final_target), kickoff_rank, desc(real_score), desc(bogus_value))
+
+  head(bench$player_id, n_reserves)
+}
+
+format_planner_time <- function(x, fallback = "Before first relevant lock") {
+  if (is.null(x) || length(x) == 0) {
+    return(fallback)
+  }
+
+  vapply(x, function(one_x) {
+    if (is.na(one_x)) {
+      return(fallback)
+    }
+    formatted <- format(as.POSIXct(one_x, tz = "UTC"), "%a %I:%M %p %Z", tz = "Australia/Sydney")
+    sub(" 0", " ", formatted, fixed = TRUE)
+  }, character(1))
+}
+
+format_player_label <- function(player_name, slot = NULL) {
+  if (!is.null(slot) && nzchar(slot)) {
+    paste0(player_name, " (", slot, ")")
+  } else {
+    player_name
+  }
+}
+
+describe_reserve_transition <- function(old_ids, new_ids, player_lookup) {
+  old_ids <- old_ids %||% integer()
+  new_ids <- new_ids %||% integer()
+
+  turned_on <- setdiff(new_ids, old_ids)
+  turned_off <- setdiff(old_ids, new_ids)
+
+  pieces <- c()
+  if (length(turned_on)) {
+    pieces <- c(
+      pieces,
+      paste0("Reserve ON: ", paste(player_lookup[as.character(turned_on)], collapse = ", "))
+    )
+  }
+  if (length(turned_off)) {
+    pieces <- c(
+      pieces,
+      paste0("Reserve OFF: ", paste(player_lookup[as.character(turned_off)], collapse = ", "))
+    )
+  }
+
+  if (!length(pieces)) {
+    "No reserve change"
+  } else {
+    paste(pieces, collapse = " | ")
+  }
+}
+
+describe_slot_changes <- function(from_assign, to_assign, player_lookup) {
+  if (is.null(from_assign) || is.null(to_assign) || !nrow(from_assign) || !nrow(to_assign)) {
+    return("No lineup change")
+  }
+
+  lookup_name <- function(player_id, fallback = "bench") {
+    if (is.na(player_id)) {
+      return(fallback)
+    }
+    matched <- unname(player_lookup[as.character(player_id)])
+    if (!length(matched) || is.na(matched) || !nzchar(matched)) {
+      fallback
+    } else {
+      matched
+    }
+  }
+
+  merged <- from_assign %>%
+    select(slot, from_player_id = player_id) %>%
+    full_join(
+      to_assign %>% select(slot, to_player_id = player_id),
+      by = "slot"
+    ) %>%
+    filter(from_player_id != to_player_id)
+
+  if (!nrow(merged)) {
+    return("No lineup change")
+  }
+
+  paste(
+    apply(merged, 1, function(row) {
+      from_name <- lookup_name(row[["from_player_id"]], "bench")
+      to_name <- lookup_name(row[["to_player_id"]], "bench")
+      paste0(row[["slot"]], ": ", from_name, " -> ", to_name)
+    }),
+    collapse = " | "
+  )
+}
+
+prepare_planner_roster <- function(
+  base_players,
+  master_player,
+  player_id_lookup,
+  availability_risk,
+  zero_tackle_tbl,
+  next_fixture_lookup,
+  team_performance,
+  current_round,
+  now = Sys.time()
+) {
+  if (is.null(base_players) || !nrow(base_players)) {
+    return(NULL)
+  }
+
+  if (!"team_abbrev" %in% names(base_players)) {
+    base_players$team_abbrev <- NA_character_
+  }
+  if (!"position" %in% names(base_players)) {
+    base_players$position <- NA_character_
+  }
+  if (!"full_name" %in% names(base_players)) {
+    base_players$full_name <- NA_character_
+  }
+
+  attack_lookup <- NULL
+  if (!is.null(team_performance) && nrow(team_performance)) {
+    attack_lookup <- team_performance %>%
+      filter(!is.na(attacking_trend_last_3)) %>%
+      arrange(desc(round), desc(run_ts)) %>%
+      group_by(team_abbrev) %>%
+      slice_head(n = 1) %>%
+      ungroup() %>%
+      transmute(team_abbrev, attacking_trend_last_3)
+  }
+
+  base_players %>%
+    left_join(
+      player_id_lookup %>%
+        transmute(player_id, lookup_name = full_name, lookup_team_abbrev = team_abbrev),
+      by = "player_id"
+    ) %>%
+    left_join(
+      master_player %>%
+        transmute(
+          player_id,
+          master_name = full_name,
+          master_team_abbrev = team,
+          positions_string = positions,
+          current_price,
+          breakeven,
+          current_season_average,
+          average_3_round,
+          average_5_round,
+          ownership_percentage,
+          total_points,
+          games_played,
+          master_status = status,
+          injury_detail,
+          master_expected_return = expected_return,
+          goal_kicking_status,
+          starting_status,
+          master_locked_flag = locked_flag,
+          master_played_status = played_status,
+          active_flag
+        ),
+      by = "player_id"
+    ) %>%
+    left_join(
+      availability_risk %>%
+        transmute(
+          player_id,
+          availability_risk_band = risk_band,
+          injury_suspension_status_text,
+          availability_expected_return = expected_return,
+          availability_locked_flag = locked_flag,
+          availability_played_status = played_status_display
+        ),
+      by = "player_id"
+    ) %>%
+    left_join(
+      zero_tackle_tbl %>%
+        transmute(
+          player_id,
+          zero_tackle_reason,
+          zero_tackle_expected_return,
+          zero_tackle_risk_band,
+          zero_tackle_status_text
+        ),
+      by = "player_id"
+    ) %>%
+    mutate(
+      player = coalesce(lookup_name, master_name, full_name),
+      team_abbrev = coalesce(team_abbrev, lookup_team_abbrev, master_team_abbrev),
+      current_position = coalesce(position, positions_string),
+      positions_string = coalesce(positions_string, current_position)
+    ) %>%
+    left_join(next_fixture_lookup, by = "team_abbrev") %>%
+    left_join(attack_lookup, by = "team_abbrev") %>%
+    mutate(
+      eligibility = lapply(seq_len(n()), function(i) planner_player_eligibility(positions_string[[i]], current_position[[i]])),
+      next_kickoff_utc = as.POSIXct(next_kickoff_utc, tz = "UTC"),
+      bye_this_round = !is.na(upcoming_round) & upcoming_round > current_round,
+      risk_band = coalesce(zero_tackle_risk_band, availability_risk_band, "low"),
+      injury_text = coalesce(zero_tackle_status_text, injury_suspension_status_text, injury_detail, master_status),
+      expected_return = coalesce(zero_tackle_expected_return, availability_expected_return, master_expected_return),
+      recent_average = coalesce(average_3_round, current_season_average, 0),
+      matchup_rating = coalesce(next_matchup_rating, next_matchup_rating_team, 24),
+      attack_trend = coalesce(attacking_trend_last_3, 0),
+      goal_bonus = if_else(grepl("goal|kicker|primary", tolower(coalesce(goal_kicking_status, ""))), 4, 0),
+      starting_bonus = if_else(grepl("start", tolower(coalesce(starting_status, ""))), 3, 0),
+      risk_penalty = case_when(
+        risk_band == "high" ~ 38,
+        risk_band == "medium" ~ 18,
+        TRUE ~ 0
+      ),
+      inactive_penalty = if_else(active_flag %in% FALSE, 18, 0),
+      bye_penalty = if_else(bye_this_round, 12, 0),
+      locked_now = !is.na(next_kickoff_utc) & as.POSIXct(now, tz = "UTC") >= next_kickoff_utc,
+      real_score = recent_average +
+        matchup_rating / 3 +
+        pmax(attack_trend, 0) / 10 +
+        goal_bonus +
+        starting_bonus -
+        risk_penalty -
+        inactive_penalty -
+        bye_penalty
+    ) %>%
+    mutate(
+      player = coalesce(player, paste("Player", player_id)),
+      team_abbrev = coalesce(team_abbrev, "UNK")
+    )
+}
+
 theme_sc <- bs_theme(
   version = 5,
   bg = "#f4f1e8",
@@ -929,6 +1366,17 @@ build_field_dictionary <- function() {
     "Trade Logs", "Source", "Actual API means confirmed from the authenticated endpoint. Inferred round delta means derived from roster changes between snapshots.",
     "Trade Logs", "Sell Price", "Approximated at the previous round's finalised player price.",
     "Trade Logs", "Buy Price", "Approximated at the previous round's finalised player price.",
+    "Planner Starting Setup", "Placement", "Where the player should sit before the first lock: either a field slot or Bench.",
+    "Planner Starting Setup", "Reserve ON", "Whether that player should carry one of the four active reserve highlights in the starting disguise.",
+    "Planner Starting Setup", "Bogus Score", "Deception utility used to choose the initial fake lineup. Higher means a better disguise or placeholder.",
+    "Planner Starting Setup", "Note", "Plain-language reason the player is starting on field or being hidden on the bench.",
+    "Planner Move Schedule", "When", "Australia/Sydney time to make the move, usually ten minutes before the relevant kickoff.",
+    "Planner Move Schedule", "Move", "Exact action to take in SuperCoach at that time.",
+    "Planner Move Schedule", "Reserve Change", "Reserve toggles to make alongside the move so only four reserves stay highlighted.",
+    "Planner Move Schedule", "Why", "Why that timing matters for rolling lockout or disguise.",
+    "Planner Final Intended Counting Side", "Slot", "The final active position the player should occupy once the round is set correctly.",
+    "Planner Final Intended Counting Side", "Real Score", "The score-maximising heuristic used to pick the real final side from your roster after trades.",
+    "Planner Final Intended Counting Side", "Why", "Plain-language reason the planner wants that player counting in that slot.",
     "Strategy Log", "decision_window", "When the decision was made, for example pre-lockout, post-team-list, or late mail.",
     "Strategy Log", "strategy_mode", "The round-level posture such as cash build, head-to-head protect, aggression, pre-Origin prep, or bye prep.",
     "Strategy Log", "priority_1 / priority_2 / priority_3", "The top three moves or strategic aims for that week.",
@@ -1440,6 +1888,84 @@ ui <- page_navbar(
     )
   ),
   nav_panel(
+    "Planner",
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Rolling Lockout Deception Planner"),
+      div(
+        class = "card-body",
+        tags$p(
+          class = "section-note",
+          "Pick up to three trades. The planner will build a score-maximising final team, a low-reveal bogus team to start the round, and the exact moves needed to let the real side fall into place under rolling lockout."
+        ),
+        fluidRow(
+          column(
+            width = 6,
+            selectizeInput("planner_trade_out_1", "Trade out 1", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          ),
+          column(
+            width = 6,
+            selectizeInput("planner_trade_in_1", "Trade in 1", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          )
+        ),
+        fluidRow(
+          column(
+            width = 6,
+            selectizeInput("planner_trade_out_2", "Trade out 2", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          ),
+          column(
+            width = 6,
+            selectizeInput("planner_trade_in_2", "Trade in 2", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          )
+        ),
+        fluidRow(
+          column(
+            width = 6,
+            selectizeInput("planner_trade_out_3", "Trade out 3", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          ),
+          column(
+            width = 6,
+            selectizeInput("planner_trade_in_3", "Trade in 3", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
+          )
+        ),
+        tags$div(class = "hero-note", textOutput("planner_status_text"))
+      )
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Bogus Starting Setup"),
+      responsive_table("planner_start_table"),
+      card_footer(class = "section-note", "This is the legal pre-first-lock setup intended to reveal as little as possible while still preserving your path to the final scoring side.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Exact Move Schedule"),
+      responsive_table("planner_move_table"),
+      card_footer(class = "section-note", "Times are shown in Australia/Sydney and aim for a small safety buffer before each relevant kickoff.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Final Intended Counting Side"),
+      responsive_table("planner_final_table"),
+      explainer_details(
+        "Planner field dictionary",
+        tags$dl(
+          class = "definition-list",
+          tags$dt("Bogus Score"),
+          tags$dd("The deception utility used for the starting team. Higher means a better disguise, later placeholder, or better trade concealment."),
+          tags$dt("Real Score"),
+          tags$dd("The scoring heuristic used to pick the real final 14. It blends recent scoring, fixture quality, attack trend, goal-kicking, starting role, byes, and injury penalties."),
+          tags$dt("Reserve ON"),
+          tags$dd("One of the four reserve highlights for the current state. These are rotated through the move schedule as the real team comes on field.")
+        )
+      )
+    )
+  ),
+  nav_panel(
     "Dictionary",
     card(
       class = "sc-card",
@@ -1684,6 +2210,441 @@ server <- function(input, output, session) {
     next_team_fixture_lookup(
       nrl_fixture_source_history = data$nrl_fixture_source_history,
       fixture_matchup = data$fixture_matchup
+    )
+  })
+
+  planner_context <- reactive({
+    ladder <- latest_ladder_round()
+    my_team_id <- ladder %>%
+      filter(is_me %in% TRUE) %>%
+      pull(user_team_id) %>%
+      first()
+
+    opponent_team_id <- tryCatch(current_matchup()$opponent_team_id, error = function(e) NA_integer_)
+
+    list(
+      my_team_id = my_team_id,
+      opponent_team_id = opponent_team_id
+    )
+  })
+
+  planner_market_pool <- reactive({
+    data <- dashboard_data()
+
+    prepare_planner_roster(
+      base_players = data$master_player %>%
+        transmute(
+          player_id,
+          full_name,
+          team_abbrev = team,
+          position = positions
+        ),
+      master_player = data$master_player,
+      player_id_lookup = data$player_id_lookup,
+      availability_risk = data$availability_risk,
+      zero_tackle_tbl = zero_tackle_injuries(),
+      next_fixture_lookup = club_next_fixture(),
+      team_performance = data$team_performance,
+      current_round = current_round()
+    )
+  })
+
+  current_planner_roster <- reactive({
+    data <- dashboard_data()
+    context <- planner_context()
+    req(!is.na(context$my_team_id))
+
+    snapshot <- latest_team_players_snapshot(data$team_players_latest, context$my_team_id)
+    req(!is.null(snapshot), nrow(snapshot) > 0)
+
+    prepare_planner_roster(
+      base_players = snapshot,
+      master_player = data$master_player,
+      player_id_lookup = data$player_id_lookup,
+      availability_risk = data$availability_risk,
+      zero_tackle_tbl = zero_tackle_injuries(),
+      next_fixture_lookup = club_next_fixture(),
+      team_performance = data$team_performance,
+      current_round = current_round()
+    )
+  })
+
+  planner_trade_out_choices <- reactive({
+    roster <- current_planner_roster() %>%
+      arrange(current_position, player)
+
+    c(
+      "No trade" = "",
+      setNames(
+        as.character(roster$player_id),
+        paste0(
+          roster$player,
+          " | ",
+          coalesce(roster$positions_string, roster$current_position, "?"),
+          " | ",
+          dollar(coalesce(roster$current_price, 0))
+        )
+      )
+    )
+  })
+
+  planner_trade_in_choices <- reactive({
+    roster_ids <- current_planner_roster()$player_id
+
+    market <- planner_market_pool() %>%
+      filter(!player_id %in% roster_ids) %>%
+      arrange(desc(active_flag %in% TRUE), desc(real_score), player)
+
+    c(
+      "No trade" = "",
+      setNames(
+        as.character(market$player_id),
+        paste0(
+          market$player,
+          " | ",
+          coalesce(market$positions_string, market$current_position, "?"),
+          " | ",
+          market$team_abbrev,
+          " | ",
+          dollar(coalesce(market$current_price, 0))
+        )
+      )
+    )
+  })
+
+  observe({
+    out_choices <- planner_trade_out_choices()
+    in_choices <- planner_trade_in_choices()
+
+    updateSelectizeInput(session, "planner_trade_out_1", choices = out_choices, selected = isolate(input$planner_trade_out_1 %||% ""), server = TRUE)
+    updateSelectizeInput(session, "planner_trade_out_2", choices = out_choices, selected = isolate(input$planner_trade_out_2 %||% ""), server = TRUE)
+    updateSelectizeInput(session, "planner_trade_out_3", choices = out_choices, selected = isolate(input$planner_trade_out_3 %||% ""), server = TRUE)
+
+    updateSelectizeInput(session, "planner_trade_in_1", choices = in_choices, selected = isolate(input$planner_trade_in_1 %||% ""), server = TRUE)
+    updateSelectizeInput(session, "planner_trade_in_2", choices = in_choices, selected = isolate(input$planner_trade_in_2 %||% ""), server = TRUE)
+    updateSelectizeInput(session, "planner_trade_in_3", choices = in_choices, selected = isolate(input$planner_trade_in_3 %||% ""), server = TRUE)
+  })
+
+  planner_trades <- reactive({
+    pairs <- data.frame(
+      out_id = c(
+        as.character(input$planner_trade_out_1 %||% ""),
+        as.character(input$planner_trade_out_2 %||% ""),
+        as.character(input$planner_trade_out_3 %||% "")
+      ),
+      in_id = c(
+        as.character(input$planner_trade_in_1 %||% ""),
+        as.character(input$planner_trade_in_2 %||% ""),
+        as.character(input$planner_trade_in_3 %||% "")
+      ),
+      stringsAsFactors = FALSE
+    ) %>%
+      mutate(
+        out_id = suppressWarnings(as.integer(if_else(nzchar(out_id), out_id, NA_character_))),
+        in_id = suppressWarnings(as.integer(if_else(nzchar(in_id), in_id, NA_character_)))
+      ) %>%
+      filter(!is.na(out_id) | !is.na(in_id))
+
+    if (!nrow(pairs)) {
+      return(pairs)
+    }
+
+    current_lookup <- current_planner_roster() %>%
+      select(out_id = player_id, out_player = player, out_team = team_abbrev)
+    market_lookup <- planner_market_pool() %>%
+      select(in_id = player_id, in_player = player, in_team = team_abbrev)
+
+    pairs %>%
+      left_join(current_lookup, by = "out_id") %>%
+      left_join(market_lookup, by = "in_id")
+  })
+
+  planner_bundle <- reactive({
+    current_roster <- current_planner_roster()
+    future_market <- planner_market_pool()
+    trades <- planner_trades()
+    slots <- slot_template_from_game_rules(dashboard_data()$game_rules)
+
+    notes <- character()
+    if (nrow(trades)) {
+      if (any(is.na(trades$out_id) | is.na(trades$in_id))) {
+        notes <- c(notes, "Incomplete trade rows were ignored because each line needs both a trade-out and a trade-in.")
+      }
+      if (any(duplicated(na.omit(trades$out_id)))) {
+        notes <- c(notes, "You have duplicated a trade-out player.")
+      }
+      if (any(duplicated(na.omit(trades$in_id)))) {
+        notes <- c(notes, "You have duplicated a trade-in player.")
+      }
+    }
+
+    trades_complete <- trades %>%
+      filter(!is.na(out_id), !is.na(in_id))
+
+    trade_out_ids <- na.omit(trades_complete$out_id)
+    trade_in_ids <- na.omit(trades_complete$in_id)
+
+    future_roster <- bind_rows(
+      current_roster %>% filter(!player_id %in% trade_out_ids),
+      future_market %>% filter(player_id %in% trade_in_ids)
+    ) %>%
+      arrange(player_id) %>%
+      distinct(player_id, .keep_all = TRUE)
+
+    final_assign <- solve_best_lineup(future_roster, slots, "real_score")
+    req(!is.null(final_assign), nrow(final_assign) > 0)
+
+    final_ids <- final_assign$player_id
+    kickoff_candidates <- future_roster$next_kickoff_utc[!is.na(future_roster$next_kickoff_utc)]
+    first_kickoff <- if (length(kickoff_candidates)) min(kickoff_candidates) else as.POSIXct(NA, tz = "UTC")
+
+    current_target_ids <- intersect(final_ids, current_roster$player_id)
+    current_roster <- current_roster %>%
+      mutate(
+        late_bonus = case_when(
+          is.na(next_kickoff_utc) ~ 22,
+          !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
+          TRUE ~ 0
+        ),
+        placeholder_bonus = case_when(
+          bye_this_round %in% TRUE ~ 12,
+          risk_band == "high" ~ 10,
+          TRUE ~ 0
+        ),
+        bogus_value = if_else(player_id %in% trade_out_ids, 42, 0) +
+          if_else(!player_id %in% current_target_ids, 24, -14) +
+          late_bonus +
+          placeholder_bonus -
+          real_score / 8
+      )
+
+    pre_assign <- solve_best_lineup(current_roster, slots, "bogus_value")
+    req(!is.null(pre_assign), nrow(pre_assign) > 0)
+
+    future_roster <- future_roster %>%
+      mutate(
+        late_bonus = case_when(
+          is.na(next_kickoff_utc) ~ 18,
+          !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
+          TRUE ~ 0
+        ),
+        placeholder_bonus = case_when(
+          bye_this_round %in% TRUE ~ 12,
+          risk_band == "high" ~ 9,
+          TRUE ~ 0
+        ),
+        bogus_value = if_else(!player_id %in% final_ids, 26, -14) +
+          late_bonus +
+          placeholder_bonus -
+          real_score / 8
+      )
+
+    post_assign <- if (nrow(trades)) solve_best_lineup(future_roster, slots, "bogus_value") else pre_assign
+    req(!is.null(post_assign), nrow(post_assign) > 0)
+
+    pre_reserves <- choose_planner_reserves(current_roster, pre_assign$player_id, current_target_ids)
+    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids)
+
+    player_lookup <- c(
+      setNames(current_roster$player, as.character(current_roster$player_id)),
+      setNames(future_roster$player, as.character(future_roster$player_id))
+    )
+    player_lookup <- player_lookup[!duplicated(names(player_lookup))]
+
+    trade_deadline <- if (length(trade_in_ids)) {
+      incoming_times <- future_roster %>%
+        filter(player_id %in% trade_in_ids) %>%
+        pull(next_kickoff_utc)
+      incoming_times <- incoming_times[!is.na(incoming_times)]
+      if (length(incoming_times)) min(incoming_times) - 10 * 60 else NA
+    } else {
+      NA
+    }
+
+    state_assign <- pre_assign
+    state_reserves <- pre_reserves
+    state_roster <- current_roster
+    move_rows <- list()
+
+    if (nrow(trades_complete)) {
+      incoming_positions <- vapply(trades_complete$in_id, function(one_id) {
+        slot_hit <- post_assign$slot[match(one_id, post_assign$player_id)]
+        if (length(slot_hit) && !is.na(slot_hit)) slot_hit else "Bench"
+      }, character(1))
+
+      trade_text <- paste(
+        paste0(
+          "Trade ",
+          trades_complete$out_player,
+          " -> ",
+          trades_complete$in_player,
+          " and park ",
+          trades_complete$in_player,
+          " at ",
+          incoming_positions
+        ),
+        collapse = " | "
+      )
+
+      move_rows[[length(move_rows) + 1L]] <- data.frame(
+        Step = length(move_rows) + 1L,
+        When = format_planner_time(trade_deadline),
+        Move = trade_text,
+        `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
+        Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
+        stringsAsFactors = FALSE
+      )
+      state_assign <- post_assign
+      state_reserves <- post_reserves
+      state_roster <- future_roster
+    }
+
+    final_plan <- final_assign %>%
+      left_join(
+        future_roster %>%
+          select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, risk_band, bye_this_round),
+        by = "player_id"
+      ) %>%
+      arrange(coalesce(next_kickoff_utc, as.POSIXct("2100-01-01", tz = "UTC")), desc(real_score))
+
+    for (i in seq_len(nrow(final_plan))) {
+      desired_slot <- final_plan$slot[[i]]
+      target_id <- final_plan$player_id[[i]]
+      target_name <- final_plan$player[[i]]
+      current_slot_for_target <- state_assign$slot[match(target_id, state_assign$player_id)]
+
+      if (length(current_slot_for_target) && !is.na(current_slot_for_target) && identical(current_slot_for_target, desired_slot)) {
+        next
+      }
+
+      desired_occ <- state_assign %>% filter(slot == desired_slot)
+      desired_occ_id <- desired_occ$player_id[[1]]
+      desired_occ_name <- desired_occ$player[[1]]
+
+      if (length(current_slot_for_target) && !is.na(current_slot_for_target)) {
+        state_assign$player_id[state_assign$slot == desired_slot] <- target_id
+        state_assign$player[state_assign$slot == desired_slot] <- target_name
+        state_assign$player_id[state_assign$slot == current_slot_for_target] <- desired_occ_id
+        state_assign$player[state_assign$slot == current_slot_for_target] <- desired_occ_name
+        move_text <- paste0(
+          "Swap ", format_player_label(target_name, state_roster$current_position[match(target_id, state_roster$player_id)]),
+          " into ", desired_slot,
+          "; move ", format_player_label(desired_occ_name, state_roster$current_position[match(desired_occ_id, state_roster$player_id)]),
+          " to ", current_slot_for_target
+        )
+      } else {
+        state_assign$player_id[state_assign$slot == desired_slot] <- target_id
+        state_assign$player[state_assign$slot == desired_slot] <- target_name
+        move_text <- paste0("Move ", target_name, " into ", desired_slot, "; bench ", desired_occ_name)
+      }
+
+      next_reserves <- choose_planner_reserves(state_roster, state_assign$player_id, final_ids)
+
+      move_rows[[length(move_rows) + 1L]] <- data.frame(
+        Step = length(move_rows) + 1L,
+        When = format_planner_time(final_plan$next_kickoff_utc[[i]] - 10 * 60),
+        Move = move_text,
+        `Reserve Change` = describe_reserve_transition(state_reserves, next_reserves, player_lookup),
+        Why = if (!is.na(final_plan$next_kickoff_utc[[i]])) {
+          paste0(
+            "Latest clean switch before ",
+            final_plan$team_abbrev[[i]],
+            " v ",
+            final_plan$next_opponent[[i]] %||% "their opponent",
+            " locks."
+          )
+        } else if (final_plan$bye_this_round[[i]] %in% TRUE) {
+          "No kickoff this round: only move if you need the shape for disguise."
+        } else {
+          "No kickoff found, so make this move before the first relevant lock."
+        },
+        stringsAsFactors = FALSE
+      )
+
+      state_reserves <- next_reserves
+    }
+
+    pre_field_ids <- pre_assign$player_id
+    pre_bench <- current_roster %>%
+      filter(!player_id %in% pre_field_ids) %>%
+      arrange(desc(player_id %in% pre_reserves), next_kickoff_utc, desc(real_score), player)
+
+    starting_setup <- bind_rows(
+      pre_assign %>%
+        left_join(
+          current_roster %>%
+            select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, bogus_value, current_position, risk_band, bye_this_round),
+          by = "player_id"
+        ) %>%
+        transmute(
+          Placement = slot,
+          Player = player,
+          Team = team_abbrev,
+          `Reserve ON` = if_else(player_id %in% pre_reserves, "Yes", "No"),
+          `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
+          `Bogus Score` = round(bogus_value, 1),
+          Note = case_when(
+            player_id %in% trade_out_ids ~ "trade disguise: keeps the planned sell on field",
+            player_id %in% current_target_ids ~ "real scorer left on field from the start",
+            bye_this_round %in% TRUE ~ "zero-scoring bye placeholder",
+            risk_band == "high" ~ "injury / non-play placeholder",
+            TRUE ~ "bogus placeholder to hide the real shape"
+          )
+        ),
+      pre_bench %>%
+        transmute(
+          Placement = "Bench",
+          Player = player,
+          Team = team_abbrev,
+          `Reserve ON` = if_else(player_id %in% pre_reserves, "Yes", "No"),
+          `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
+          `Bogus Score` = round(bogus_value, 1),
+          Note = case_when(
+            player_id %in% current_target_ids & player_id %in% pre_reserves ~ "hidden scorer with reserve live",
+            player_id %in% current_target_ids ~ "hidden scorer waiting for a later move",
+            TRUE ~ "bench cover only"
+          )
+        )
+    )
+
+    final_setup <- final_assign %>%
+      left_join(
+        future_roster %>%
+          select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, risk_band, bye_this_round, recent_average, matchup_rating),
+        by = "player_id"
+      ) %>%
+      transmute(
+        Slot = slot,
+        Player = player,
+        Team = team_abbrev,
+        `Next Opp` = next_opponent,
+        `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
+        `Real Score` = round(real_score, 1),
+        Why = case_when(
+          risk_band == "high" ~ "forced in despite risk because the slot has no better legal alternative",
+          bye_this_round %in% TRUE ~ "bye this round, so only survives if the slot has no better live scorer",
+          recent_average >= 70 & matchup_rating >= 28 ~ "strong form and playable matchup",
+          matchup_rating >= 32 ~ "fixture-led scoring play",
+          recent_average >= 60 ~ "best available scorer in slot",
+          TRUE ~ "best legal combination after trades"
+        )
+      )
+
+    status_lines <- c(
+      paste0("Real team is optimised for ", nrow(final_setup), " active scorers plus 4 rotating reserves."),
+      if (nrow(trades_complete)) paste0("Selected trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | ")) else "Selected trades: no trade.",
+      if (!is.na(trade_deadline)) paste0("Latest trade window: ", format_planner_time(trade_deadline)) else "Latest trade window: no trade timing constraint detected."
+    )
+
+    if (length(notes)) {
+      status_lines <- c(status_lines, paste(notes, collapse = " | "))
+    }
+
+    list(
+      status_text = paste(status_lines, collapse = "\n"),
+      starting_setup = starting_setup,
+      move_schedule = bind_rows(move_rows),
+      final_setup = final_setup
     )
   })
 
@@ -2624,6 +3585,30 @@ server <- function(input, output, session) {
         `Buy Price` = dollar(buy_price)
       ) %>%
       slice_head(n = 60)
+  })
+
+  output$planner_status_text <- safe_text({
+    planner_bundle()$status_text
+  }, fallback = "Planner is waiting on a valid squad snapshot and fixture schedule.")
+
+  output$planner_start_table <- safe_table({
+    planner_bundle()$starting_setup
+  })
+
+  output$planner_move_table <- safe_table({
+    moves <- planner_bundle()$move_schedule
+    if (is.null(moves) || !nrow(moves)) {
+      data.frame(
+        Status = "No moves were required beyond the bogus starting setup.",
+        check.names = FALSE
+      )
+    } else {
+      moves
+    }
+  })
+
+  output$planner_final_table <- safe_table({
+    planner_bundle()$final_setup
   })
 
   output$prompt_pack_status <- safe_text({
