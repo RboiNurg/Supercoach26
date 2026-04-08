@@ -1,6 +1,6 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 11:45:17 AEST
+- Generated at: 2026-04-08 13:28:32 AEST
 - League ID: 21064
 - Current round: 6
 - Latest squad pulls: you R6, opponent R5
@@ -12,6 +12,7 @@
 ## Source freshness
 | run_ts | settings_current_round | current_round | round_inference_source | mutable_rounds | rounds_pulled | fixture_rounds_pulled | player_history_refreshed_n | nrl_fixture_rounds_pulled | nrl_ladder_rounds_pulled |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-04-08 08:10:47 AEST | 5 | 6 | nrl_fixture_completion | 5,6 | 5,6 | 5,6,7 | 262 | 4,5,6,7,8,9,10 | 5,6 |
 | 2026-04-08 00:16:20 AEST | 5 | 6 | nrl_fixture_completion | 5,6 | 5,6 | 5,6,7 | 262 | 4,5,6,7,8,9,10 | 5,6 |
 | 2026-04-07 23:10:12 AEST | 5 | 6 | nrl_fixture_completion | 5,6 | 1,2,3,4,5,6 | 1,2,3,4,5,6,7 | 545 | 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27 | 1,2,3,4,5,6 |
 
@@ -38,6 +39,22 @@
 | 6 | Lord of the Grims | Alex | 1101 | 0 | 6110 | $13,839,100 | $72,100 |
 | 7 | Spearmint Rhinos | Zaine | 1163 | 0 | 6036 | $13,849,800 | $52,800 |
 | 8 | Hebudeh | sam | 1334 | 0 | 6166 | $13,889,500 | $18,300 |
+
+## Full league table
+| position | team_name | coach_name | wins | losses | prev_round_points | current_round_points | total_points_live | squad_value | bank | total_value | changes | trade_boosts_used |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Slewisbrah RLFC | Lewis | 5 | 0 | 1199 | 0 | 6238 | $13,790,500 | $39,000 | $13,829,500 | 8 | 2 |
+| 2 | Crows | sam | 4 | 1 | 1186 | 0 | 6200 | $13,569,900 | $303,600 | $13,873,500 | 6 | 1 |
+| 3 | Jerky Turkeys | Joe | 4 | 1 | 1221 | 0 | 6210 | $13,714,400 | $185,900 | $13,900,300 | 6 | 0 |
+| 4 | Gordonites  | Daniel | 3 | 2 | 1168 | 0 | 6226 | $13,557,800 | $115,700 | $13,673,500 | 10 | 3 |
+| 5 | Magnetic cucumbers | Daniel | 3 | 2 | 1153 | 0 | 6147 | $13,455,700 | $135,200 | $13,590,900 | 8 | 2 |
+| 6 | Lord of the Grims | Alex | 3 | 2 | 1101 | 0 | 6110 | $13,767,000 | $72,100 | $13,839,100 | 6 | 2 |
+| 7 | Spearmint Rhinos | Zaine | 3 | 2 | 1163 | 0 | 6036 | $13,797,000 | $52,800 | $13,849,800 | 9 | 2 |
+| 8 | Hebudeh | sam | 2 | 3 | 1334 | 0 | 6166 | $13,871,200 | $18,300 | $13,889,500 | 11 | 4 |
+| 9 | Waterboys | william | 2 | 3 | 1099 | 0 | 5989 | $13,695,300 | $67,300 | $13,762,600 | 7 | 0 |
+| 10 | Get That India | Johnny | 1 | 4 | 1122 | 0 | 5727 | $13,704,400 | $4,800 | $13,709,200 | 7 | 1 |
+| 11 | Grog Baguettes | Greg | 0 | 5 | 942 | 0 | 5747 | $13,348,200 | $58,600 | $13,406,800 | 9 | 2 |
+| 12 | WoodDucks | Craig | 0 | 5 | 1025 | 0 | 5612 | $13,414,500 | $20,500 | $13,435,000 | 7 | 2 |
 
 ## Availability and lockout watch
 | side | player | team | risk_band | status | expected_return | currently_locked | projected_score_this_week |
@@ -85,6 +102,38 @@
 | Stonestreet, Sam | SHA | SYD | 27.3 | 55.2 | low | FALSE |
 | To'o, Brian | PTH | BUL | 34.0 | 54.4 | low | FALSE |
 | Colquhoun, Jesse | SHA | SYD | 27.3 | 53.2 | low | FALSE |
+
+## Matchup player detail
+| side | player | team | selected_this_week | currently_locked | next_opponent | next_matchup_rating | projected_score_this_week | projected_score_next_3_weeks | projected_value_change_next_3_weeks | risk_band | injury_status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opponent | Cleary, Nathan | PTH | TRUE | FALSE | BUL | 34.0 | 100.3 | 95.0 | NA | low | Yet to play |
+| Opponent | Martin, Noah | CBR | TRUE | FALSE | STH | 17.3 | 65.7 | 75.8 | NA | low | Yet to play |
+| Opponent | Chan, Joe | MEL | TRUE | FALSE | NZL | 21.3 | 80.3 | 75.8 | NA | low | Yet to play |
+| Opponent | Mitchell, Latrell | STH | TRUE | FALSE | CBR | 26.3 | 56.7 | 73.4 | NA | low | Yet to play |
+| Opponent | Warbrick, William | MEL | TRUE | FALSE | NZL | 21.3 | 66.7 | 71.6 | NA | low | Yet to play |
+| Opponent | Trindall, Braydon | SHA | TRUE | FALSE | SYD | 27.3 | 67.7 | 71.4 | NA | low | Yet to play |
+| Opponent | Carrigan, Patrick | BRO | TRUE | FALSE | NQC | 18.3 | 71.7 | 70.0 | NA | low | Yet to play |
+| Opponent | Brailey, Blayke | SHA | TRUE | FALSE | SYD | 27.3 | 67.7 | 69.0 | NA | low | Yet to play |
+| Opponent | Hau, Arama | GCT | TRUE | FALSE | PAR | 23.3 | 77.3 | 68.8 | NA | low | Yet to play |
+| Opponent | Walsh, Reece | BRO | TRUE | FALSE | NQC | 18.3 | 67.3 | 67.0 | NA | high | Cheekbone / Round 11 |
+| Opponent | Stonestreet, Sam | SHA | TRUE | FALSE | SYD | 27.3 | 58.7 | 55.2 | NA | low | Yet to play |
+| Opponent | To'o, Brian | PTH | TRUE | FALSE | BUL | 34.0 | 49.0 | 54.4 | NA | low | Yet to play |
+| Opponent | Colquhoun, Jesse | SHA | TRUE | FALSE | SYD | 27.3 | 51.0 | 53.2 | NA | low | Yet to play |
+| Opponent | Fifita, David | STH | TRUE | FALSE | CBR | 26.3 | 37.3 | 49.4 | NA | low | Yet to play |
+| Opponent | Mooney, Trey | NEW | TRUE | FALSE | WST | 20.3 | 27.7 | 48.2 | NA | low | Yet to play |
+| Opponent | Chester, Tom | NQC | TRUE | FALSE | BRO | 21.3 | 33.7 | 47.4 | NA | low | Yet to play |
+| Opponent | Hunt, Fletcher | NEW | TRUE | FALSE | WST | 20.3 | 52.0 | 46.0 | NA | low | Yet to play |
+| Opponent | Walker, Cody | STH | TRUE | FALSE | CBR | 26.3 | 30.7 | 46.0 | NA | low | Yet to play |
+| Opponent | Whyte, Naufahu | SYD | TRUE | FALSE | SHA | 22.9 | 42.7 | 45.4 | NA | low | Yet to play |
+| Opponent | Crichton, Angus | SYD | TRUE | FALSE | SHA | 22.9 | 37.3 | 43.8 | NA | low | Yet to play |
+| Opponent | Atkinson, Daniel | STG | TRUE | FALSE | MNL | 18.4 | 35.3 | 39.4 | NA | low | Yet to play |
+| Opponent | Makasini, Heamasi | WST | TRUE | FALSE | NEW | 22.7 | 48.0 | 38.4 | NA | low | Yet to play |
+| Opponent | Sharpe, Fletcher | NEW | TRUE | FALSE | WST | 20.3 | 40.3 | 36.4 | NA | low | Yet to play |
+| Opponent | Lisati, Ativalu | MEL | TRUE | FALSE | NZL | 21.3 | 0.0 | 33.0 | NA | high | Calf / Round 7 |
+| Opponent | Ioelu, Benaiah | SYD | TRUE | FALSE | SHA | 22.9 | 0.0 | 13.6 | NA | low | Yet to play |
+| Opponent | Fa'alogo, Sua | MEL | TRUE | FALSE | NZL | 21.3 | 79.0 | 101.6 | NA | low | Yet to play |
+| You | Farnworth, Herbie | DOL | TRUE | FALSE | PTH | 15.0 | 85.7 | 82.0 | NA | high | Bye Next Round |
+| You | Martin, Noah | CBR | TRUE | FALSE | STH | 17.3 | 65.7 | 75.8 | NA | low | Yet to play |
 
 ## Upcoming fixture market watchlist
 | player | team | next_opponent | current_price | recent_average | next_matchup_rating | category | projected_price_rise_next_round | schedule_swing_indicator | cash_cow_maturity_status | why |
@@ -154,6 +203,14 @@
 | 3 | 2 | 0 | 2 |
 | 2 | 2 | 0 | 2 |
 
+## Opponent trade pattern detail
+| round | trades_detected | buys | sells | buy_value | sell_value | source_mix |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5 | 2 | Walsh, Reece, Hunt, Fletcher | Leo, Moses, Trbojevic, Tom | $1,163,800 | $1,044,900 | Inferred delta |
+| 4 | 1 | Trindall, Braydon | Luai, Jarome | $484,900 | $465,700 | Inferred delta |
+| 3 | 2 | Fa'alogo, Sua, Mooney, Trey | Flegler, Thomas, Kini, Keano | $953,700 | $841,200 | Inferred delta |
+| 2 | 2 | Leo, Moses, Lisati, Ativalu | Purdue, Jaxon, Bai, Cooper | $505,000 | $793,000 | Inferred delta |
+
 ## League-wide trade log
 | round | team | coach | source | sell_player | sell_price | buy_player | buy_price |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -182,10 +239,70 @@
 | 5 | WoodDucks | Craig | Inferred round delta | To'o, Brian | $563,900 | Sasagi, Simi | $528,600 |
 | 4 | Crows | sam | Inferred round delta | Lisati, Ativalu | $269,400 | Chan, Joe | $444,100 |
 
+## League-wide trade pressure
+| team | coach | cumulative_detected_changes | latest_trade_round |
+| --- | --- | --- | --- |
+| Hebudeh | sam | 11 | 5 |
+| Gordonites  | Daniel | 10 | 5 |
+| Grog Baguettes | Greg | 9 | 5 |
+| Spearmint Rhinos | Zaine | 9 | 5 |
+| Magnetic cucumbers | Daniel | 8 | 5 |
+| Slewisbrah RLFC | Lewis | 8 | 5 |
+| Get That India | Johnny | 7 | 5 |
+| Waterboys | william | 7 | 5 |
+| WoodDucks | Craig | 7 | 5 |
+| Crows | sam | 6 | 5 |
+| Jerky Turkeys | Joe | 6 | 5 |
+| Lord of the Grims | Alex | 6 | 4 |
+
 ## Long-horizon planning snapshot
 | team_name | coach_name | current_round | current_squad_value | projected_score_next_3_weeks | trades_remaining | boosts_remaining | finals_round | next_bye_rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Grog Baguettes | Greg | 6 | $13,348,200 | 0.0 | 37 | 3 | 23 | c(12, 13, 15, 16, 18, 19) |
+
+## Strategy windows ahead
+| window | signal | why_it_matters |
+| --- | --- | --- |
+| Current matchup | Waterboys (william) | Your current head-to-head opponent for round 6. |
+| Resource state | Trades 37 / Boosts 3 | Next bye rounds: c(12, 13, 15, 16, 18, 19) |
+| Opponent behaviour | 7 detected changes | Latest detected trade round: 5 |
+
+## Last completed strategy review
+| note |
+| --- |
+| No prior strategy review is available yet. |
+
+## Rolling strategy decision log
+| note |
+| --- |
+| No strategy reports have been filed yet. Add rows to data/.../manual_inputs/strategy_decision_log.csv. |
+
+## Current weekly strategy brief
+# Weekly strategy brief
+
+Fill this in before building the GPT pack.
+
+## Current round posture
+- Choose the broad mode for this week: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.
+
+## What matters this week
+- Add the 2-4 biggest strategic constraints or opportunities.
+
+## Opponent notes
+- Add any manual read on your current matchup or league rivals.
+
+## Decision intent
+- Describe the type of moves we want the GPT to prefer this week.
+
+## Strategy prompt instructions
+# Strategy prompt instructions
+
+- Diagnose the round before recommending players.
+- Decide whether this week is about rank aggression, head-to-head safety, cash generation, Origin preparation, or bye coverage.
+- Use opponent behaviour, squad value, cash position, fixture swings, injuries, and trade trends together.
+- When recommending moves, explain the strategic purpose, not just the player names.
+- Review the previous filed strategy entry before giving the new plan.
+- End with a filing-ready strategy report using the fields from `strategy_decision_log.csv`.
 
 ## Origin watch
 _Origin watch file is empty. Fill `data/.../manual_inputs/origin_watch.csv` when you want probable or official Origin notes included._
@@ -195,6 +312,38 @@ _Origin watch file is empty. Fill `data/.../manual_inputs/origin_watch.csv` when
 
 - Add any rumours, beat-reporter notes, or manual context here.
 - This file is optional and will be included in the GPT export when populated.
+
+## Key metric glossary
+| field | meaning |
+| --- | --- |
+| price_signal / next_signal | Heuristic next price-cycle move based on recent form and price history. Not an official breakeven. |
+| swing | Short-term schedule classification: easier_short_term, harder_short_term, or stable. |
+| maturity | Where a player sits in the cash cycle: rising, flattening, or near_peak_or_peaked. |
+| matchup | Immediate fixture rating from the stored matchup model. Higher means friendlier scoring conditions in this project. |
+| Proj 3w | Stored next-three-week player projection when available. |
+| Detected changes / Changes | Actual API trades where available, otherwise inferred from roster deltas between saved snapshots. |
+| Total Value | Squad value plus cash in bank. |
+
+## Required GPT response shape
+1. State the strategic posture for this round in one line: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.
+2. Review the previous strategy entry and say what still carries forward.
+3. Diagnose the opponent and the league pressure this week.
+4. Recommend the preferred move set and explain the strategic purpose of each move.
+5. Name the biggest risks, timing traps, and what to watch before lockout.
+6. End with a filing-ready weekly report using the template below.
+
+## Filing template for the weekly strategy report
+- round:
+- decision_window:
+- strategy_mode:
+- priority_1:
+- priority_2:
+- priority_3:
+- opponent_read:
+- execution_status:
+- result_review:
+- next_week_carry_forward:
+- submitted_at:
 
 ## Coverage gaps and caveats
 | checklist_item | status | notes |

@@ -146,7 +146,10 @@ load_dashboard_data <- function() {
     prompt_pack_meta = read_optional_text(file.path(data_dir, "analysis_export", "latest_gpt_prompt_pack_meta.json")),
     prompt_pack_text = read_optional_text(file.path(data_dir, "analysis_export", "latest_gpt_prompt_pack.md")),
     origin_watch = read_optional_csv(file.path(data_dir, "manual_inputs", "origin_watch.csv")),
-    weekly_notes = read_optional_text(file.path(data_dir, "manual_inputs", "weekly_context_notes.md"))
+    weekly_notes = read_optional_text(file.path(data_dir, "manual_inputs", "weekly_context_notes.md")),
+    strategy_brief = read_optional_text(file.path(data_dir, "manual_inputs", "weekly_strategy_brief.md")),
+    strategy_prompt = read_optional_text(file.path(data_dir, "manual_inputs", "strategy_prompt_instructions.md")),
+    strategy_log = read_optional_csv(file.path(data_dir, "manual_inputs", "strategy_decision_log.csv"))
   )
 }
 
@@ -926,6 +929,13 @@ build_field_dictionary <- function() {
     "Trade Logs", "Source", "Actual API means confirmed from the authenticated endpoint. Inferred round delta means derived from roster changes between snapshots.",
     "Trade Logs", "Sell Price", "Approximated at the previous round's finalised player price.",
     "Trade Logs", "Buy Price", "Approximated at the previous round's finalised player price.",
+    "Strategy Log", "decision_window", "When the decision was made, for example pre-lockout, post-team-list, or late mail.",
+    "Strategy Log", "strategy_mode", "The round-level posture such as cash build, head-to-head protect, aggression, pre-Origin prep, or bye prep.",
+    "Strategy Log", "priority_1 / priority_2 / priority_3", "The top three moves or strategic aims for that week.",
+    "Strategy Log", "opponent_read", "How you read the matchup or league behaviour that week.",
+    "Strategy Log", "execution_status", "Whether the plan was planned, executed, partly executed, or missed.",
+    "Strategy Log", "result_review", "Short review of how the prior strategy actually played out.",
+    "Strategy Log", "next_week_carry_forward", "What should still matter next week.",
     "League Schedule Window", "current_score", "Live matchup score for the upcoming/current league matchup window where available.",
     "Refresh Log", "settings_current_round", "Round reported directly by SuperCoach settings.",
     "Refresh Log", "effective_current_round", "Round the pipeline actually uses after NRL fixture-completion logic.",
@@ -1387,6 +1397,30 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("Coverage Gaps"),
       responsive_table("coverage_gap_table")
+    )
+  ),
+  nav_panel(
+    "Strategy",
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Current Weekly Strategy Brief"),
+      verbatimTextOutput("strategy_brief_text"),
+      card_footer(class = "section-note", "Edit data/supercoach_league_21064/manual_inputs/weekly_strategy_brief.md to set the round posture and strategic constraints before rebuilding the GPT pack.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Strategy Prompt Instructions"),
+      verbatimTextOutput("strategy_prompt_text"),
+      card_footer(class = "section-note", "These instructions are appended to the GPT pack so the model reasons about strategy, not just players.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Rolling Strategy Decision Log"),
+      responsive_table("strategy_log_table"),
+      card_footer(class = "section-note", "File the GPT's weekly output back into strategy_decision_log.csv so next week's pack can review and carry it forward.")
     )
   ),
   nav_panel(
@@ -2609,6 +2643,55 @@ server <- function(input, output, session) {
   output$weekly_notes_text <- safe_text({
     dashboard_data()$weekly_notes %||%
       "Add notes to data/supercoach_league_21064/manual_inputs/weekly_context_notes.md and they will appear here and in the GPT pack."
+  })
+
+  output$strategy_brief_text <- safe_text({
+    dashboard_data()$strategy_brief %||%
+      "Add notes to data/supercoach_league_21064/manual_inputs/weekly_strategy_brief.md and they will appear here and in the GPT pack."
+  })
+
+  output$strategy_prompt_text <- safe_text({
+    dashboard_data()$strategy_prompt %||%
+      "Add instructions to data/supercoach_league_21064/manual_inputs/strategy_prompt_instructions.md and they will be appended to the GPT pack."
+  })
+
+  output$strategy_log_table <- safe_table({
+    data <- dashboard_data()$strategy_log
+
+    if (is.null(data) || nrow(data) == 0) {
+      return(data.frame(
+        Note = "Fill data/supercoach_league_21064/manual_inputs/strategy_decision_log.csv to keep a rolling weekly strategy memory.",
+        check.names = FALSE
+      ))
+    }
+
+    required_cols <- c(
+      "round", "decision_window", "strategy_mode", "priority_1", "priority_2",
+      "priority_3", "opponent_read", "execution_status", "result_review",
+      "next_week_carry_forward", "submitted_at"
+    )
+    missing_cols <- setdiff(required_cols, names(data))
+    for (col in missing_cols) {
+      data[[col]] <- NA_character_
+    }
+
+    data %>%
+      mutate(round = suppressWarnings(as.integer(round))) %>%
+      arrange(desc(round), desc(as.character(submitted_at))) %>%
+      transmute(
+        Round = round,
+        Window = decision_window,
+        `Strategy Mode` = strategy_mode,
+        `Priority 1` = priority_1,
+        `Priority 2` = priority_2,
+        `Priority 3` = priority_3,
+        `Opponent Read` = opponent_read,
+        Status = execution_status,
+        `Review` = result_review,
+        `Carry Forward` = next_week_carry_forward,
+        `Submitted` = submitted_at
+      ) %>%
+      slice_head(n = 12)
   })
 
   output$prompt_pack_preview <- safe_text({

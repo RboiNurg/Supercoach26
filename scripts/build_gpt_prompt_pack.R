@@ -622,6 +622,9 @@ build_gpt_prompt_pack <- function(
 
   origin_watch_path <- file.path(manual_input_dir, "origin_watch.csv")
   weekly_notes_path <- file.path(manual_input_dir, "weekly_context_notes.md")
+  strategy_brief_path <- file.path(manual_input_dir, "weekly_strategy_brief.md")
+  strategy_log_path <- file.path(manual_input_dir, "strategy_decision_log.csv")
+  strategy_prompt_path <- file.path(manual_input_dir, "strategy_prompt_instructions.md")
 
   if (!file.exists(origin_watch_path)) {
     writeLines(
@@ -639,6 +642,52 @@ build_gpt_prompt_pack <- function(
         "- This file is optional and will be included in the GPT export when populated."
       ),
       weekly_notes_path
+    )
+  }
+
+  if (!file.exists(strategy_brief_path)) {
+    writeLines(
+      c(
+        "# Weekly strategy brief",
+        "",
+        "Fill this in before building the GPT pack.",
+        "",
+        "## Current round posture",
+        "- What phase are we in: cash build, consolidation, aggressive climb, pre-Origin cover, bye preparation, or head-to-head push?",
+        "",
+        "## What matters this week",
+        "- Add the 2-4 biggest strategic constraints or opportunities.",
+        "",
+        "## Opponent notes",
+        "- Add any manual read on your current matchup or league rivals.",
+        "",
+        "## Decision intent",
+        "- Describe the type of moves we want the GPT to prefer this week."
+      ),
+      strategy_brief_path
+    )
+  }
+
+  if (!file.exists(strategy_prompt_path)) {
+    writeLines(
+      c(
+        "# Strategy prompt instructions",
+        "",
+        "- Diagnose the round before recommending players.",
+        "- Decide whether this week is about rank aggression, head-to-head safety, cash generation, Origin preparation, or bye coverage.",
+        "- Use opponent behaviour, squad value, cash position, fixture swings, injuries, and trade trends together.",
+        "- When recommending moves, explain the strategic purpose, not just the player names.",
+        "- Always include a short review of the previous filed strategy entry before giving the new plan.",
+        "- End with a filing-ready strategy report using the fields from strategy_decision_log.csv."
+      ),
+      strategy_prompt_path
+    )
+  }
+
+  if (!file.exists(strategy_log_path)) {
+    writeLines(
+      "entry_id,round,decision_window,strategy_mode,priority_1,priority_2,priority_3,opponent_read,execution_status,result_review,next_week_carry_forward,submitted_at",
+      strategy_log_path
     )
   }
 
@@ -668,7 +717,22 @@ build_gpt_prompt_pack <- function(
   long_horizon <- read_optional_rds(file.path(data_dir, "long_horizon_planning_table.rds"))
   origin_watch <- read_optional_csv(origin_watch_path)
   weekly_notes <- read_optional_text(weekly_notes_path)
+  strategy_brief <- read_optional_text(strategy_brief_path)
+  strategy_prompt_instructions <- read_optional_text(strategy_prompt_path)
+  strategy_log <- read_optional_csv(strategy_log_path)
   strategy_doc <- read_optional_text(strategy_path)
+
+  if (!is.null(strategy_log) && nrow(strategy_log)) {
+    required_strategy_cols <- c(
+      "entry_id", "round", "decision_window", "strategy_mode",
+      "priority_1", "priority_2", "priority_3", "opponent_read",
+      "execution_status", "result_review", "next_week_carry_forward", "submitted_at"
+    )
+    missing_strategy_cols <- setdiff(required_strategy_cols, names(strategy_log))
+    for (col in missing_strategy_cols) {
+      strategy_log[[col]] <- NA_character_
+    }
+  }
 
   if (is.null(game_rules) || !nrow(game_rules)) {
     stop("game_rules_round_state.rds is required to build the GPT pack.", call. = FALSE)
@@ -816,6 +880,18 @@ build_gpt_prompt_pack <- function(
       dpp_players
     )
 
+  my_team_label <- matchup_summary %>%
+    filter(side == "You") %>%
+    transmute(label = paste0(trimws(team_name), " (", trimws(coach_name), ")")) %>%
+    pull(label) %>%
+    first() %||% "Unknown team"
+
+  opponent_label <- matchup_summary %>%
+    filter(side == "Opponent") %>%
+    transmute(label = paste0(trimws(team_name), " (", trimws(coach_name), ")")) %>%
+    pull(label) %>%
+    first() %||% "Unknown opponent"
+
   future_league_fixtures <- latest_fixtures %>%
     filter(round >= current_round, round <= current_round + 4L) %>%
     filter(user_team1_id == my_team_id | user_team2_id == my_team_id) %>%
@@ -840,6 +916,34 @@ build_gpt_prompt_pack <- function(
       bank = fmt_money(cash_end_round_calc)
     ) %>%
     utils::head(8)
+
+  league_table_live <- latest_ladder_round %>%
+    arrange(position) %>%
+    left_join(live_ladder_round, by = "user_team_id") %>%
+    left_join(
+      team_stats_snapshot %>%
+        select(user_team_id, total_changes, trade_boosts_used),
+      by = "user_team_id"
+    ) %>%
+    left_join(
+      trade_team_totals,
+      by = "user_team_id"
+    ) %>%
+    transmute(
+      position,
+      team_name,
+      coach_name,
+      wins,
+      losses,
+      prev_round_points = round_points,
+      current_round_points = coalesce(current_round_points, 0),
+      total_points_live = total_points + coalesce(current_round_points, 0),
+      squad_value = fmt_money(squad_value_calc),
+      bank = fmt_money(cash_end_round_calc),
+      total_value = fmt_money(team_value_total_calc),
+      changes = coalesce(total_changes, cumulative_detected_changes, 0L),
+      trade_boosts_used
+    )
 
   squad_signals <- latest_team_squad_snapshot(
     squad_round_enriched,
@@ -899,6 +1003,24 @@ build_gpt_prompt_pack <- function(
       projected_value_change_next_3_weeks = projected_value_change_next_3_weeks
     ) %>%
     arrange(side, desc(selected_this_week), desc(currently_locked), desc(projected_score_next_3_weeks))
+
+  matchup_player_detail <- squad_signals %>%
+    transmute(
+      side,
+      player = full_name,
+      team = team_abbrev,
+      selected_this_week,
+      currently_locked,
+      next_opponent,
+      next_matchup_rating = fmt_number(next_matchup_rating, 1),
+      projected_score_this_week = fmt_number(projected_score_this_week, 1),
+      projected_score_next_3_weeks = fmt_number(projected_score_next_3_weeks, 1),
+      projected_value_change_next_3_weeks = fmt_money(projected_value_change_next_3_weeks),
+      risk_band,
+      injury_status = coalesce(injury_suspension_status_text, played_status_display)
+    ) %>%
+    arrange(side, desc(selected_this_week), desc(currently_locked), desc(projected_score_next_3_weeks)) %>%
+    utils::head(28)
 
   availability_watch <- squad_signals %>%
     filter(
@@ -1137,6 +1259,129 @@ build_gpt_prompt_pack <- function(
       utils::head(24)
   }
 
+  league_trade_pressure <- if (is.null(trade_team_totals) || !nrow(trade_team_totals)) {
+    tibble::tibble(note = "No league-wide trade summary is available yet.")
+  } else {
+    trade_team_totals %>%
+      left_join(team_lookup_from_ladder(ladder_history), by = "user_team_id") %>%
+      transmute(
+        team = team_name,
+        coach = coach_name,
+        cumulative_detected_changes,
+        latest_trade_round
+      ) %>%
+      arrange(desc(cumulative_detected_changes), desc(latest_trade_round), team)
+  }
+
+  opponent_trade_pattern <- if (is.null(trade_log) || !nrow(trade_log) || is.na(opponent_team_id)) {
+    tibble::tibble(note = "No opponent trade pattern is available.")
+  } else {
+    trade_log %>%
+      filter(user_team_id == opponent_team_id) %>%
+      group_by(round) %>%
+      summarise(
+        trades_detected = n(),
+        buys = paste(na.omit(buy_player_name), collapse = ", "),
+        sells = paste(na.omit(sell_player_name), collapse = ", "),
+        buy_value = fmt_money(sum(buy_price, na.rm = TRUE)),
+        sell_value = fmt_money(sum(sell_price, na.rm = TRUE)),
+        source_mix = paste(sort(unique(if_else(trade_source == "actual_api", "Actual API", "Inferred delta"))), collapse = ", "),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(round)) %>%
+      utils::head(6)
+  }
+
+  strategy_log_recent <- if (is.null(strategy_log) || !nrow(strategy_log)) {
+    tibble::tibble(note = "No strategy reports have been filed yet. Add rows to data/.../manual_inputs/strategy_decision_log.csv.")
+  } else {
+    strategy_log %>%
+      mutate(
+        round = suppressWarnings(as.integer(round)),
+        submitted_at = as.character(submitted_at)
+      ) %>%
+      arrange(desc(round), desc(submitted_at)) %>%
+      transmute(
+        round,
+        decision_window,
+        strategy_mode,
+        priority_1,
+        priority_2,
+        priority_3,
+        opponent_read,
+        execution_status,
+        result_review,
+        next_week_carry_forward,
+        submitted_at
+      ) %>%
+      utils::head(8)
+  }
+
+  last_strategy_review <- if (is.null(strategy_log) || !nrow(strategy_log)) {
+    tibble::tibble(note = "No prior strategy review is available yet.")
+  } else {
+    strategy_log %>%
+      mutate(round = suppressWarnings(as.integer(round))) %>%
+      filter(!is.na(round), round < current_round) %>%
+      arrange(desc(round), desc(as.character(submitted_at))) %>%
+      slice_head(n = 1) %>%
+      transmute(
+        round,
+        strategy_mode,
+        execution_status,
+        result_review,
+        next_week_carry_forward
+      ) %>%
+      { if (nrow(.) == 0) tibble::tibble(note = "No previous-round strategy review is available yet.") else . }
+  }
+
+  strategy_windows <- bind_rows(
+    tibble::tibble(
+      window = "Current matchup",
+      signal = opponent_label,
+      why_it_matters = paste0("Your current head-to-head opponent for round ", current_round, ".")
+    ),
+    if (!is.null(long_horizon) && nrow(long_horizon)) {
+      long_horizon %>%
+        filter(team_name == latest_ladder_round$team_name[latest_ladder_round$is_me %in% TRUE][1]) %>%
+        transmute(
+          window = "Resource state",
+          signal = paste0("Trades ", trades_remaining, " / Boosts ", boosts_remaining),
+          why_it_matters = paste0("Next bye rounds: ", next_bye_rounds)
+        ) %>%
+        utils::head(1)
+    },
+    if (!is.null(origin_watch) && nrow(origin_watch)) {
+      origin_watch %>%
+        count(selection_status, name = "player_n") %>%
+        transmute(
+          window = paste0("Origin - ", selection_status),
+          signal = paste0(player_n, " player(s)"),
+          why_it_matters = "Potential short-term availability distortion before and during Origin."
+        )
+    },
+    if (!is.null(trade_team_totals) && nrow(trade_team_totals) && !is.na(opponent_team_id)) {
+      trade_team_totals %>%
+        filter(user_team_id == opponent_team_id) %>%
+        transmute(
+          window = "Opponent behaviour",
+          signal = paste0(cumulative_detected_changes, " detected changes"),
+          why_it_matters = paste0("Latest detected trade round: ", latest_trade_round)
+        )
+    }
+  )
+
+  metric_glossary <- tibble::tribble(
+    ~field, ~meaning,
+    "price_signal / next_signal", "Heuristic next price-cycle move based on recent form and price history. Not an official breakeven.",
+    "swing", "Short-term schedule classification: easier_short_term, harder_short_term, or stable.",
+    "maturity", "Where a player sits in the cash cycle: rising, flattening, or near_peak_or_peaked.",
+    "matchup", "Immediate fixture rating from the stored matchup model. Higher means friendlier scoring conditions in this project.",
+    "Proj 3w", "Stored next-three-week player projection when available.",
+    "Detected changes / Changes", "Actual API trades where available, otherwise inferred from roster deltas between saved snapshots.",
+    "Total Value", "Squad value plus cash in bank."
+  )
+
   coverage_gaps <- checklist_coverage %>%
     filter(status != "implemented") %>%
     select(checklist_item, status, notes)
@@ -1188,17 +1433,17 @@ build_gpt_prompt_pack <- function(
     weekly_notes
   }
 
-  my_team_label <- matchup_summary %>%
-    filter(side == "You") %>%
-    transmute(label = paste0(trimws(team_name), " (", trimws(coach_name), ")")) %>%
-    pull(label) %>%
-    first() %||% "Unknown team"
+  strategy_brief_section <- if (is.null(strategy_brief) || !nzchar(trimws(strategy_brief))) {
+    "_No weekly strategy brief provided._"
+  } else {
+    strategy_brief
+  }
 
-  opponent_label <- matchup_summary %>%
-    filter(side == "Opponent") %>%
-    transmute(label = paste0(trimws(team_name), " (", trimws(coach_name), ")")) %>%
-    pull(label) %>%
-    first() %||% "Unknown opponent"
+  strategy_prompt_section <- if (is.null(strategy_prompt_instructions) || !nzchar(trimws(strategy_prompt_instructions))) {
+    "_No extra strategy prompt instructions provided._"
+  } else {
+    strategy_prompt_instructions
+  }
 
   latest_matchup_rounds <- latest_round_by_team(team_players_latest, c(my_team_id, opponent_team_id))
   your_latest_pull <- latest_matchup_rounds %>% filter(user_team_id == my_team_id) %>% pull(latest_round) %>% first()
@@ -1228,6 +1473,9 @@ build_gpt_prompt_pack <- function(
     "## League pulse",
     markdown_table(league_pulse, max_rows = 8),
     "",
+    "## Full league table",
+    markdown_table(league_table_live, max_rows = 12),
+    "",
     "## Availability and lockout watch",
     markdown_table(availability_watch, max_rows = 18),
     "",
@@ -1236,6 +1484,9 @@ build_gpt_prompt_pack <- function(
     "",
     "## Opponent squad profile",
     markdown_table(opponent_profile, max_rows = 14),
+    "",
+    "## Matchup player detail",
+    markdown_table(matchup_player_detail, max_rows = 28),
     "",
     "## Upcoming fixture market watchlist",
     markdown_table(market_watchlist, max_rows = 16),
@@ -1249,17 +1500,62 @@ build_gpt_prompt_pack <- function(
     "## Opponent trade behaviour",
     markdown_table(trade_behaviour, max_rows = 6),
     "",
+    "## Opponent trade pattern detail",
+    markdown_table(opponent_trade_pattern, max_rows = 6),
+    "",
     "## League-wide trade log",
     markdown_table(league_trade_log, max_rows = 24),
     "",
+    "## League-wide trade pressure",
+    markdown_table(league_trade_pressure, max_rows = 12),
+    "",
     "## Long-horizon planning snapshot",
     markdown_table(long_horizon_snapshot, max_rows = 4),
+    "",
+    "## Strategy windows ahead",
+    markdown_table(strategy_windows, max_rows = 12),
+    "",
+    "## Last completed strategy review",
+    markdown_table(last_strategy_review, max_rows = 4),
+    "",
+    "## Rolling strategy decision log",
+    markdown_table(strategy_log_recent, max_rows = 8),
+    "",
+    "## Current weekly strategy brief",
+    strategy_brief_section,
+    "",
+    "## Strategy prompt instructions",
+    strategy_prompt_section,
     "",
     "## Origin watch",
     origin_section,
     "",
     "## Manual weekly notes",
     weekly_notes_section,
+    "",
+    "## Key metric glossary",
+    markdown_table(metric_glossary, max_rows = 20),
+    "",
+    "## Required GPT response shape",
+    "1. State the strategic posture for this round in one line: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.",
+    "2. Review the previous strategy entry and say what still carries forward.",
+    "3. Diagnose the opponent and the league pressure this week.",
+    "4. Recommend the preferred move set and explain the strategic purpose of each move.",
+    "5. Name the biggest risks, timing traps, and what to watch before lockout.",
+    "6. End with a filing-ready weekly report using the template below.",
+    "",
+    "## Filing template for the weekly strategy report",
+    "- round:",
+    "- decision_window:",
+    "- strategy_mode:",
+    "- priority_1:",
+    "- priority_2:",
+    "- priority_3:",
+    "- opponent_read:",
+    "- execution_status:",
+    "- result_review:",
+    "- next_week_carry_forward:",
+    "- submitted_at:",
     "",
     "## Coverage gaps and caveats",
     markdown_table(coverage_gaps, max_rows = 20),
