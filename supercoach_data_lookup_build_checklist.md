@@ -238,6 +238,261 @@ For each opponent and by round:
 - boost usage history
 - captain history
 - vice-captain patterns if inferable
+
+## 10. Rolling lockout deception planner spec
+
+This section is the hard spec for the in-app `Rolling Lockout Deception Planner`.
+
+The planner is not a generic optimiser. Its purpose is to help set a legal fake-looking team before the first game, then give exact step-by-step changes so the real highest-scoring team lands in place under rolling lockout.
+
+### Planner intent
+
+The planner must do all of these at once:
+
+- maximise likely scoring from the final counting side
+- preserve legal rolling-lockout flexibility
+- avoid revealing the true team shape too early
+- respect already-locked players and already-closed games
+- keep captaincy, vice-captaincy, field slots, bench slots and reserves legally consistent at every step
+- produce instructions that a human can literally follow on the SuperCoach site
+
+### Planner inputs
+
+The planner must read and use:
+
+- current squad
+- current player prices
+- current player position eligibility
+- kickoff time for every player this round
+- current round lock state
+- projected scoring / form / matchup values
+- selected trades, up to 3
+- selected VC/C combination
+- current legal team structure:
+  - 14 on-field scorers
+  - 4 reserve scorers
+  - all remaining squad members on bench in non-reserve state
+
+### Planner outputs
+
+The planner must generate four linked outputs:
+
+1. Confirmed post-trade team
+
+- trades selected by the user
+- traded-in player initially inherits the traded-out player's current site slot if legal
+- if not legal, planner must explicitly state where the incoming player is first parked
+
+2. Bogus starting setup
+
+- full squad state, not just active players
+- every player must appear exactly once
+- every player must be in one of:
+  - on-field slot
+  - bench slot
+- reserve state must be explicit for every bench player
+- bogus captain and bogus vice-captain must be explicit
+
+3. Exact move schedule
+
+- one row per lock window / game
+- each row must start from the previous row's resulting state
+- each row must only make moves that are still legal at that moment
+- each row must explicitly list:
+  - players locking now
+  - exact trade if a trade happens here
+  - exact paired swaps only
+  - captaincy change
+  - reserve changes
+  - why this is the latest safe move point
+
+4. Final intended counting side
+
+- full squad state again, not just the 14 field players
+- the 14 on-field scorers must be explicit
+- the 4 reserve scorers must be explicit
+- all remaining bench players must still be shown
+- captain, VC, reserve flags and slots must all be visible
+
+### Hard rules
+
+These are non-negotiable rules. If any are broken, the plan is wrong.
+
+#### 10.1 Locked-player immutability
+
+- once a player's game has locked, that player cannot be moved again
+- if `Paseka` locks on Friday, the planner must never suggest moving him on Sunday
+- if a player was already moved into a scoring slot before kickoff, later rows must treat that position as fixed unless another still-unlocked interchangeable player is legally being swapped
+
+#### 10.2 Stateful planning
+
+- planner rows must be chained
+- row 2 must start from row 1 result
+- row 3 must start from row 2 result
+- planner must never silently re-optimise from scratch mid-round
+
+#### 10.3 No vague bench moves
+
+- `player -> bench` on its own is invalid output
+- every move must be exact:
+  - `Swap FRF2 Rudolf with Bench 2 Haas`
+  - `Trade Walsh -> Edwards into FLX`
+- if a player leaves a slot, the output must show exactly who fills it
+
+#### 10.4 Bench state must be explicit
+
+- all non-field players must have a numbered bench slot:
+  - `Bench 1`, `Bench 2`, ...
+- if a field player is swapped with a bench player, the former field player takes that bench slot
+- reserve state must follow the slot/bench state and then be explicitly updated if changed
+
+#### 10.5 Reserve legality
+
+- there can only ever be 4 reserve scorers
+- if a reserve-carrying player is swapped to field, reserve ownership travels to the bench player replacing him until explicitly changed
+- reserve changes must be shown in the schedule
+
+#### 10.6 Position legality
+
+- every intermediate step must respect SuperCoach positional rules
+- DPP players may be used to support legal swaps
+- FLEX logic must also remain legal at each step
+- traded-in players must fit the slot they are placed in
+
+#### 10.7 Captaincy legality
+
+- there must always be a current captain and a current VC
+- if a traded-out player was holding `C` or `VC`, the same row must repair that
+- bogus captaincy and real captaincy are separate concepts, but each planner state must still be internally legal
+
+#### 10.8 Traceability
+
+- user must be able to read the schedule top to bottom without guessing
+- no row may imply hidden reshuffles outside what is printed
+
+### Specific failure examples to guard against
+
+These are known bad behaviours the planner must never produce.
+
+#### Failure A: moving a player after he already locked
+
+Bad:
+
+- Friday: `Paseka` remains on field
+- Sunday: planner says `Swap FRF1 Paseka -> Hau`
+
+Why bad:
+
+- `Paseka` was already locked earlier in the round
+- planner has ignored lock chronology
+
+#### Failure B: vague bench destination
+
+Bad:
+
+- `2RF1: Colquhoun -> bench`
+
+Why bad:
+
+- this does not say which bench slot he goes to
+- it does not say who takes `2RF1`
+- it gives no reserve consequence
+
+#### Failure C: mid-round silent reshuffle
+
+Bad:
+
+- Thursday row changes several Saturday/Sunday placeholders even though those players are not involved in the current lock
+
+Why bad:
+
+- planner is re-solving from scratch instead of preserving state
+- this makes the schedule unreadable and unrealistic
+
+#### Failure D: captaincy orphan
+
+Bad:
+
+- incumbent captain is traded out
+- planner only says `Set VC to Edwards`
+- no actual captain remains
+
+Why bad:
+
+- every planner state must have both a valid captain and VC
+
+### Deliverables checklist
+
+The planner is only complete when all items below are true.
+
+- trades are confirmed before VC/C selection
+- VC/C recommendations are built from the post-trade team
+- bogus starting setup shows all squad players
+- bogus starting setup shows all 4 reserve scorers
+- bogus starting setup shows bogus captain and bogus VC
+- exact move schedule is one row per lock window
+- every schedule row uses the previous row's resulting state
+- no row moves already-locked players
+- no row contains a vague `player -> bench` instruction
+- every swap shows both source and destination
+- reserve changes are explicit and legal
+- final intended counting side shows all squad players
+- final intended counting side clearly marks:
+  - on-field scorers
+  - 4 reserve scorers
+  - captain
+  - VC
+- planner remains legal under DPP / FLEX / trade scenarios
+
+### Acceptance test cases
+
+These cases should be manually checked whenever planner logic changes.
+
+#### Case 1: no-trade round
+
+- planner should still produce bogus setup, schedule and final side
+- schedule should not invent unnecessary moves
+
+#### Case 2: simple same-position trade
+
+- example: `Walsh -> Edwards`
+- incoming player should inherit or be parked cleanly
+- no captaincy orphan
+- no later impossible FLB/FLEX movement
+
+#### Case 3: early-lock scorer on reserve
+
+- if a Thursday player is a true final scorer but starts hidden on reserve
+- planner must bring him in before that lock
+- planner must not try to move him later
+
+#### Case 4: reserve carry-over
+
+- if a reserve-on player is swapped into the field
+- the outgoing field player must inherit that bench slot
+- reserve state must be updated explicitly
+
+#### Case 5: DPP bridge case
+
+- a legal DPP-enabled swap sequence should be preserved
+- planner must not break slot legality at any intermediate step
+
+### Coding note
+
+When changing planner logic, code should be reviewed against this exact order:
+
+1. build legal post-trade squad
+2. build bogus starting state from that squad
+3. preserve full state:
+   - field slots
+   - bench slots
+   - reserve flags
+   - captaincy
+4. step game-by-game through lock windows
+5. only make exact legal changes needed at that window
+6. emit final full squad state
+
+If the planner cannot express a move as an exact legal state transition, it should not output that move.
 - cash history
 - positional weaknesses
 - tendency to hold trades or spend aggressively
