@@ -20,6 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
+planner_logic_build <- "planner-cvc-fix-f6d61d6"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -2944,6 +2945,7 @@ ui <- page_navbar(
           tags$span(" ", class = "planner-spacer"),
           actionButton("planner_generate", "Generate Plan", class = "btn btn-primary")
         ),
+        tags$div(class = "hero-note", textOutput("planner_build_text")),
         tags$div(class = "hero-note", textOutput("planner_trade_status_text")),
         tags$h4("Suggested Captain / VC Combos", class = "planner-subheading"),
         responsive_table("planner_cvc_table"),
@@ -4916,6 +4918,10 @@ server <- function(input, output, session) {
       summary
     }
   }, fallback = "Choose up to three trades, then click Confirm Trades.")
+
+  output$planner_build_text <- safe_text({
+    paste("Planner build:", planner_logic_build)
+  }, fallback = paste("Planner build:", planner_logic_build))
 
   output$planner_status_text <- safe_text({
     planner_bundle()$status_text
