@@ -1,6 +1,6 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 13:28:32 AEST
+- Generated at: 2026-04-08 13:49:19 AEST
 - League ID: 21064
 - Current round: 6
 - Latest squad pulls: you R6, opponent R5
@@ -84,6 +84,61 @@
 | Colquhoun, Jesse | SHA | SYD | 27.3 | 22.7 | easier_short_term | 53.2 | NA | non_keeper | normal | upside from form and price momentum |
 | Moses, Mitchell | PAR | GCT | 23.3 | 22.1 | stable | 50.2 | NA | non_keeper | normal | upside from form and price momentum |
 | Fifita, David | STH | CBR | 26.3 | 32.3 | harder_short_term | 49.4 | NA | non_keeper | normal | upside from form and price momentum |
+
+## Trade recommendation frame
+| decision_type | player | team | next_opponent | trigger | support_metric | note |
+| --- | --- | --- | --- | --- | --- | --- |
+| Trade out / risk review | Graham, Campbell | STH | CBR | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Mooney, Trey | NEW | WST | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Mamouzelos, Peter | STH | CBR | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Walker, Cody | STH | CBR | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Sanders, Ethan | CBR | STH | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Faeamani, Sialetili | GCT | PAR | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Paseka, Taniela | MNL | STG | monitor | NA | only move if it upgrades round strategy |
+| Trade out / risk review | Tedesco, James | SYD | SHA | monitor | NA | only move if it upgrades round strategy |
+| Trade in watch | Jenkins, Thomas | PTH | BUL | Monitor | $0 | blend of form, matchup and price |
+| Trade in watch | Fa'alogo, Sua | MEL | NZL | Monitor | $0 | blend of form, matchup and price |
+| Trade in watch | Cleary, Nathan | PTH | BUL | Premium hold | $-30,754 | premium form hold/watch |
+| Trade in watch | Hynes, Nicholas | SHA | SYD | Premium hold | $-49,025 | premium form hold/watch |
+| Trade in watch | Boyd, Tanah | NZL | MEL | Monitor | $0 | premium form hold/watch |
+| Trade in watch | Edwards, Dylan | PTH | BUL | Monitor | $56,677 | blend of form, matchup and price |
+| Trade in watch | Ford, Jackson | NZL | MEL | Monitor | $0 | premium form hold/watch |
+| Trade in watch | Young, Dominic | NEW | WST | Monitor | $0 | premium form hold/watch |
+
+## Counting-points summary
+| selected_slots | emergency_slots | locked_counting | recommended_counting | cover_options | leave_out |
+| --- | --- | --- | --- | --- | --- |
+| 18 | 4 | 0 | 18 | 4 | 4 |
+
+## Fielding recommendation board
+| selection_rank | player | team | field_bench_npr | selected_this_week | currently_locked | fielding_call | projected_score_this_week | projected_score_next_3_weeks | recent_average | next_opponent | matchup | risk_band | fielding_why |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Yeo, Isaah | PTH | field | TRUE | FALSE | Recommended counting | 77.0 | 71.2 | 71.2 | BUL | 34.0 | low | counts now on projection plus matchup |
+| 2 | Chan, Joe | MEL | field | TRUE | FALSE | Recommended counting | 80.3 | 75.8 | 75.8 | NZL | 21.3 | low | counts now on best available projection |
+| 3 | Fa'alogo, Sua | MEL | field | TRUE | FALSE | Recommended counting | 79.0 | 101.6 | 101.6 | NZL | 21.3 | low | counts now on best available projection |
+| 4 | Hau, Arama | GCT | field | TRUE | FALSE | Recommended counting | 77.3 | 68.8 | 68.8 | PAR | 23.3 | low | counts now on best available projection |
+| 5 | Brailey, Blayke | SHA | field | TRUE | FALSE | Recommended counting | 67.7 | 69.0 | 69.0 | SYD | 27.3 | low | counts now on best available projection |
+| 6 | Warbrick, William | MEL | field | TRUE | FALSE | Recommended counting | 66.7 | 71.6 | 71.6 | NZL | 21.3 | low | counts now on best available projection |
+| 7 | Martin, Noah | CBR | field | TRUE | FALSE | Recommended counting | 65.7 | 75.8 | 75.8 | STH | 17.3 | low | counts now on best available projection |
+| 8 | Colquhoun, Jesse | SHA | field | TRUE | FALSE | Recommended counting | 51.0 | 53.2 | 53.2 | SYD | 27.3 | low | counts now on best available projection |
+| 9 | Moses, Mitchell | PAR | field | TRUE | FALSE | Recommended counting | 48.7 | 50.2 | 50.2 | GCT | 23.3 | low | counts now on best available projection |
+| 10 | Makasini, Heamasi | WST | field | TRUE | FALSE | Recommended counting | 48.0 | 38.4 | 38.4 | NEW | 22.7 | low | counts now on best available projection |
+| 11 | Haas, Payne | BRO | field | TRUE | FALSE | Recommended counting | 44.3 | 60.8 | 60.8 | NQC | 18.3 | low | counts now on best available projection |
+| 12 | Rudolf, Toby | SHA | field | TRUE | FALSE | Recommended counting | 40.3 | 35.4 | 35.4 | SYD | 27.3 | low | counts now on best available projection |
+| 13 | Fifita, David | STH | field | TRUE | FALSE | Recommended counting | 37.3 | 49.4 | 49.4 | CBR | 26.3 | low | counts now on best available projection |
+| 14 | Tedesco, James | SYD | field | TRUE | FALSE | Recommended counting | 37.3 | 54.2 | 54.2 | SHA | 22.9 | low | counts now on best available projection |
+| 15 | Paseka, Taniela | MNL | field | TRUE | FALSE | Recommended counting | 32.7 | 41.8 | 41.8 | STG | 31.0 | low | counts now on projection plus matchup |
+| 16 | Faeamani, Sialetili | GCT | field | TRUE | FALSE | Recommended counting | 34.3 | 40.2 | 40.2 | PAR | 23.3 | low | counts now on best available projection |
+| 17 | Sanders, Ethan | CBR | field | TRUE | FALSE | Recommended counting | 36.0 | 48.2 | 48.2 | STH | 17.3 | low | counts now on best available projection |
+| 18 | Walker, Cody | STH | field | TRUE | FALSE | Recommended counting | 30.7 | 46.0 | 46.0 | CBR | 26.3 | low | counts now on best available projection |
+| 19 | Walsh, Reece | BRO | field | TRUE | FALSE | Bench cover / emergency | 67.3 | 67.0 | 67.0 | NQC | 18.3 | high | Cheekbone / Round 11 |
+| 20 | Mooney, Trey | NEW | field | TRUE | FALSE | Bench cover / emergency | 27.7 | 48.2 | 48.2 | WST | 20.3 | low | good cover if late changes hit |
+| 21 | Mamouzelos, Peter | STH | field | TRUE | FALSE | Bench cover / emergency | 25.7 | 34.6 | 34.6 | CBR | 26.3 | low | good cover if late changes hit |
+| 22 | Farnworth, Herbie | DOL | field | TRUE | FALSE | Bench cover / emergency | 85.7 | 82.0 | 82.0 | PTH | 15.0 | high | Bye Next Round |
+| 23 | Graham, Campbell | STH | field | TRUE | FALSE | Leave out | 8.7 | 29.6 | 29.6 | CBR | 26.3 | low | outside the best counting-point mix right now |
+| 24 | Howarth, Jack | MEL | field | TRUE | FALSE | Leave out | 19.7 | 40.2 | 40.2 | NZL | 21.3 | medium | Hip / Round 6 |
+| 25 | Pezet, Jonah | PAR | field | TRUE | FALSE | Leave out | 38.7 | 43.0 | 43.0 | GCT | 23.3 | high | Hamstring / Round 11 |
+| 26 | Leo, Moses | MEL | field | TRUE | FALSE | Leave out | 18.3 | 39.6 | 39.6 | NZL | 21.3 | medium | Concussion / Round 6 |
 
 ## Opponent squad profile
 | player | team | next_opponent | next_matchup_rating | projected_score_next_3_weeks | risk_band | currently_locked |
@@ -328,9 +383,13 @@ _Origin watch file is empty. Fill `data/.../manual_inputs/origin_watch.csv` when
 1. State the strategic posture for this round in one line: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.
 2. Review the previous strategy entry and say what still carries forward.
 3. Diagnose the opponent and the league pressure this week.
-4. Recommend the preferred move set and explain the strategic purpose of each move.
-5. Name the biggest risks, timing traps, and what to watch before lockout.
-6. End with a filing-ready weekly report using the template below.
+4. Decide whether the best play is no trade or one/more trades, and explain why in strategic terms.
+5. If recommending trades, name the exact ins and outs, plus why the move improves the round strategy.
+6. Recommend the counting-point setup for this round: who should count, who should be cover/emergency, and who should be left out if possible.
+7. Add commentary on where the squad is clearly ahead, vulnerable, or misaligned versus the opponent and the league.
+8. Name the biggest risks, timing traps, and what to watch before lockout.
+9. If browsing is available, search web sentiment, articles, late mail, injury notes, and coach/beat-reporter commentary for anything that supports or challenges the pack.
+10. End with a filing-ready weekly report using the template below.
 
 ## Filing template for the weekly strategy report
 - round:

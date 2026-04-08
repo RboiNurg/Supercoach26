@@ -978,6 +978,11 @@ build_gpt_prompt_pack <- function(
       by = "player_id"
     ) %>%
       left_join(
+      master_player %>%
+        select(player_id, current_season_average, average_3_round, current_price),
+      by = "player_id"
+    ) %>%
+      left_join(
       live_fixture_lookup %>%
         select(
           team_abbrev,
@@ -1000,7 +1005,19 @@ build_gpt_prompt_pack <- function(
       ),
       projected_score_this_week = projected_score_this_week,
       projected_score_next_3_weeks = projected_score_next_3_weeks,
-      projected_value_change_next_3_weeks = projected_value_change_next_3_weeks
+      projected_value_change_next_3_weeks = projected_value_change_next_3_weeks,
+      selection_base_score = coalesce(
+        projected_score_this_week,
+        projected_score_next_3_weeks / 3,
+        average_3_round,
+        current_season_average,
+        0
+      ),
+      selection_score = selection_base_score +
+        coalesce(next_matchup_rating, 0) / 3 +
+        coalesce(projected_value_change_next_3_weeks, 0) / 30000 -
+        if_else(risk_band == "high", 35, if_else(risk_band == "medium", 15, 0)) -
+        if_else(grepl("bye", tolower(coalesce(injury_suspension_status_text, ""))), 25, 0)
     ) %>%
     arrange(side, desc(selected_this_week), desc(currently_locked), desc(projected_score_next_3_weeks))
 
@@ -1061,6 +1078,55 @@ build_gpt_prompt_pack <- function(
       )
     ) %>%
     utils::head(14)
+
+  selected_slots <- suppressWarnings(as.integer(game_rules$selected_slots[[1]] %||% 18L))
+  emergency_slots <- suppressWarnings(as.integer(game_rules$emergency_slots[[1]] %||% 4L))
+
+  fielding_recommendation_board <- squad_signals %>%
+    filter(side == "You") %>%
+    arrange(desc(selection_score), desc(currently_locked), desc(selected_this_week), desc(selection_base_score)) %>%
+    mutate(
+      selection_rank = row_number(),
+      fielding_call = case_when(
+        currently_locked %in% TRUE & selection_rank <= selected_slots ~ "Locked counting",
+        selection_rank <= selected_slots ~ "Recommended counting",
+        selection_rank <= selected_slots + emergency_slots ~ "Bench cover / emergency",
+        TRUE ~ "Leave out"
+      ),
+      fielding_why = case_when(
+        !is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text) ~ injury_suspension_status_text,
+        selection_rank <= selected_slots & coalesce(next_matchup_rating, 0) >= 30 ~ "counts now on projection plus matchup",
+        selection_rank <= selected_slots ~ "counts now on best available projection",
+        selection_rank <= selected_slots + emergency_slots ~ "good cover if late changes hit",
+        TRUE ~ "outside the best counting-point mix right now"
+      )
+    ) %>%
+    transmute(
+      selection_rank,
+      player = full_name,
+      team = team_abbrev,
+      field_bench_npr,
+      selected_this_week,
+      currently_locked,
+      fielding_call,
+      projected_score_this_week = fmt_number(projected_score_this_week, 1),
+      projected_score_next_3_weeks = fmt_number(projected_score_next_3_weeks, 1),
+      recent_average = fmt_number(coalesce(average_3_round, current_season_average), 1),
+      next_opponent,
+      matchup = fmt_number(next_matchup_rating, 1),
+      risk_band,
+      fielding_why
+    )
+
+  counting_points_summary <- fielding_recommendation_board %>%
+    summarise(
+      selected_slots = selected_slots,
+      emergency_slots = emergency_slots,
+      locked_counting = sum(fielding_call == "Locked counting", na.rm = TRUE),
+      recommended_counting = sum(fielding_call %in% c("Locked counting", "Recommended counting"), na.rm = TRUE),
+      cover_options = sum(fielding_call == "Bench cover / emergency", na.rm = TRUE),
+      leave_out = sum(fielding_call == "Leave out", na.rm = TRUE)
+    )
 
   opponent_profile <- squad_signals %>%
     filter(side == "Opponent", selected_this_week %in% TRUE) %>%
@@ -1163,6 +1229,42 @@ build_gpt_prompt_pack <- function(
       )
     ) %>%
     utils::head(16)
+
+  trade_recommendation_frame <- bind_rows(
+    squad_signals %>%
+      filter(side == "You") %>%
+      arrange(desc(display_urgency), selection_score) %>%
+      transmute(
+        decision_type = "Trade out / risk review",
+        player = full_name,
+        team = team_abbrev,
+        next_opponent,
+        trigger = case_when(
+          !is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text) ~ injury_suspension_status_text,
+          display_urgency %in% c("high", "medium") ~ paste("urgency", display_urgency),
+          coalesce(projected_value_change_next_3_weeks, 0) < -30000 ~ "price cooling",
+          TRUE ~ "monitor"
+        ),
+        support_metric = fmt_money(projected_value_change_next_3_weeks),
+        note = case_when(
+          !is.na(injury_suspension_status_text) & nzchar(injury_suspension_status_text) ~ "availability could force action",
+          coalesce(projected_value_change_next_3_weeks, 0) < -30000 ~ "value can leak if role/fixture do not offset it",
+          TRUE ~ "only move if it upgrades round strategy"
+        )
+      ) %>%
+      utils::head(8),
+    market_watchlist %>%
+      transmute(
+        decision_type = "Trade in watch",
+        player,
+        team,
+        next_opponent,
+        trigger = category,
+        support_metric = projected_price_rise_next_round,
+        note = why
+      ) %>%
+      utils::head(8)
+  )
 
   cash_watch <- cash_generation %>%
     left_join(
@@ -1482,6 +1584,15 @@ build_gpt_prompt_pack <- function(
     "## Your squad leverage watch",
     markdown_table(squad_leverage_watch, max_rows = 14),
     "",
+    "## Trade recommendation frame",
+    markdown_table(trade_recommendation_frame, max_rows = 16),
+    "",
+    "## Counting-points summary",
+    markdown_table(counting_points_summary, max_rows = 4),
+    "",
+    "## Fielding recommendation board",
+    markdown_table(fielding_recommendation_board, max_rows = 30),
+    "",
     "## Opponent squad profile",
     markdown_table(opponent_profile, max_rows = 14),
     "",
@@ -1540,9 +1651,13 @@ build_gpt_prompt_pack <- function(
     "1. State the strategic posture for this round in one line: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.",
     "2. Review the previous strategy entry and say what still carries forward.",
     "3. Diagnose the opponent and the league pressure this week.",
-    "4. Recommend the preferred move set and explain the strategic purpose of each move.",
-    "5. Name the biggest risks, timing traps, and what to watch before lockout.",
-    "6. End with a filing-ready weekly report using the template below.",
+    "4. Decide whether the best play is no trade or one/more trades, and explain why in strategic terms.",
+    "5. If recommending trades, name the exact ins and outs, plus why the move improves the round strategy.",
+    "6. Recommend the counting-point setup for this round: who should count, who should be cover/emergency, and who should be left out if possible.",
+    "7. Add commentary on where the squad is clearly ahead, vulnerable, or misaligned versus the opponent and the league.",
+    "8. Name the biggest risks, timing traps, and what to watch before lockout.",
+    "9. If browsing is available, search web sentiment, articles, late mail, injury notes, and coach/beat-reporter commentary for anything that supports or challenges the pack.",
+    "10. End with a filing-ready weekly report using the template below.",
     "",
     "## Filing template for the weekly strategy report",
     "- round:",
