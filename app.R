@@ -1046,6 +1046,29 @@ choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 
   head(bench$player_id, n_reserves)
 }
 
+planner_lock_step_assignment <- function(players, slots, current_kickoff, required_ids = integer()) {
+  if (is.null(players) || !nrow(players)) {
+    return(NULL)
+  }
+
+  players %>%
+    mutate(
+      step_value = bogus_value +
+        if_else(player_id %in% required_ids, 1e6, 0),
+      step_value = if_else(
+        !is.na(next_kickoff_utc) & player_id %in% required_ids,
+        step_value + real_score,
+        step_value
+      ),
+      step_value = if_else(
+        !is.na(next_kickoff_utc) & !is.na(current_kickoff) & next_kickoff_utc <= current_kickoff & !player_id %in% required_ids,
+        step_value - 1e6,
+        step_value
+      )
+    ) %>%
+    solve_best_lineup(slots, "step_value")
+}
+
 format_planner_time <- function(x, fallback = "Before first relevant lock") {
   if (is.null(x) || length(x) == 0) {
     return(fallback)
@@ -1066,6 +1089,76 @@ format_player_label <- function(player_name, slot = NULL) {
   } else {
     player_name
   }
+}
+
+slot_base_from_slot_name <- function(slot_name) {
+  slot_name <- as.character(slot_name %||% "")
+  dplyr::case_when(
+    grepl("^2RF", slot_name) ~ "2RF",
+    grepl("^FRF", slot_name) ~ "FRF",
+    grepl("^CTW", slot_name) ~ "CTW",
+    TRUE ~ slot_name
+  )
+}
+
+slots_are_interchangeable <- function(slot_a, slot_b) {
+  base_a <- slot_base_from_slot_name(slot_a)
+  base_b <- slot_base_from_slot_name(slot_b)
+  identical(base_a, base_b) && base_a %in% c("FRF", "2RF", "CTW")
+}
+
+build_lock_window_label <- function(team_abbrev, opponent_abbrev, kickoff_utc) {
+  if (is.na(kickoff_utc)) {
+    return("No fixed lock window")
+  }
+  paste0(
+    format_planner_time(kickoff_utc - 10 * 60),
+    " | ",
+    team_abbrev %||% "Team",
+    " v ",
+    opponent_abbrev %||% "Opponent",
+    " locks 10 min later"
+  )
+}
+
+describe_locking_players <- function(roster, kickoff_utc) {
+  if (is.null(roster) || !nrow(roster) || is.na(kickoff_utc)) {
+    return("No locking players identified")
+  }
+
+  locking <- roster %>%
+    filter(!is.na(next_kickoff_utc), next_kickoff_utc == kickoff_utc) %>%
+    arrange(player) %>%
+    pull(player)
+
+  if (!length(locking)) {
+    "No locking players identified"
+  } else {
+    paste(locking, collapse = ", ")
+  }
+}
+
+carry_reserves_from_swaps <- function(current_reserves, bench_pairs, field_ids) {
+  updated <- current_reserves %||% integer()
+  if (!length(updated) || is.null(bench_pairs) || !nrow(bench_pairs)) {
+    return(updated)
+  }
+
+  for (i in seq_len(nrow(bench_pairs))) {
+    incoming_id <- bench_pairs$incoming_id[[i]]
+    outgoing_id <- bench_pairs$outgoing_id[[i]]
+
+    if (is.na(incoming_id) || is.na(outgoing_id)) {
+      next
+    }
+
+    outgoing_on_bench <- !outgoing_id %in% field_ids
+    if (incoming_id %in% updated && outgoing_on_bench) {
+      updated[updated == incoming_id] <- outgoing_id
+    }
+  }
+
+  unique(updated)
 }
 
 describe_reserve_transition <- function(old_ids, new_ids, player_lookup) {
@@ -2492,11 +2585,19 @@ server <- function(input, output, session) {
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
+        sort_at_utc = trade_deadline,
+        `Lock Window` = if (!is.na(trade_deadline)) build_lock_window_label(
+          trades_complete$in_team[[1]] %||% NA_character_,
+          future_roster$next_opponent[match(trades_complete$in_id[[1]], future_roster$player_id)] %||% NA_character_,
+          trade_deadline + 10 * 60
+        ) else "Trade window",
         When = format_planner_time(trade_deadline),
+        `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
         Move = trade_text,
         `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
         Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
-        stringsAsFactors = FALSE
+        stringsAsFactors = FALSE,
+        check.names = FALSE
       )
       state_assign <- post_assign
       state_reserves <- post_reserves
@@ -2511,60 +2612,70 @@ server <- function(input, output, session) {
       ) %>%
       arrange(coalesce(next_kickoff_utc, as.POSIXct("2100-01-01", tz = "UTC")), desc(real_score))
 
-    for (i in seq_len(nrow(final_plan))) {
-      desired_slot <- final_plan$slot[[i]]
-      target_id <- final_plan$player_id[[i]]
-      target_name <- final_plan$player[[i]]
-      current_slot_for_target <- state_assign$slot[match(target_id, state_assign$player_id)]
+    final_plan_groups <- split(final_plan, as.character(final_plan$next_kickoff_utc))
 
-      if (length(current_slot_for_target) && !is.na(current_slot_for_target) && identical(current_slot_for_target, desired_slot)) {
+    for (group_name in names(final_plan_groups)) {
+      group_tbl <- final_plan_groups[[group_name]]
+      kickoff_value <- group_tbl$next_kickoff_utc[[1]]
+      required_ids <- final_plan %>%
+        filter(!is.na(next_kickoff_utc), next_kickoff_utc <= kickoff_value) %>%
+        pull(player_id)
+
+      batch_assign <- planner_lock_step_assignment(
+        players = state_roster,
+        slots = slots,
+        current_kickoff = kickoff_value,
+        required_ids = required_ids
+      )
+
+      if (is.null(batch_assign) || !nrow(batch_assign)) {
         next
       }
 
-      desired_occ <- state_assign %>% filter(slot == desired_slot)
-      desired_occ_id <- desired_occ$player_id[[1]]
-      desired_occ_name <- desired_occ$player[[1]]
+      merged_swaps <- state_assign %>%
+        select(slot, from_player_id = player_id) %>%
+        inner_join(
+          batch_assign %>% select(slot, to_player_id = player_id),
+          by = "slot"
+        ) %>%
+        filter(from_player_id != to_player_id)
 
-      if (length(current_slot_for_target) && !is.na(current_slot_for_target)) {
-        state_assign$player_id[state_assign$slot == desired_slot] <- target_id
-        state_assign$player[state_assign$slot == desired_slot] <- target_name
-        state_assign$player_id[state_assign$slot == current_slot_for_target] <- desired_occ_id
-        state_assign$player[state_assign$slot == current_slot_for_target] <- desired_occ_name
-        move_text <- paste0(
-          "Swap ", format_player_label(target_name, state_roster$current_position[match(target_id, state_roster$player_id)]),
-          " into ", desired_slot,
-          "; move ", format_player_label(desired_occ_name, state_roster$current_position[match(desired_occ_id, state_roster$player_id)]),
-          " to ", current_slot_for_target
+      bench_pairs <- merged_swaps %>%
+        transmute(
+          incoming_id = to_player_id,
+          outgoing_id = from_player_id
         )
-      } else {
-        state_assign$player_id[state_assign$slot == desired_slot] <- target_id
-        state_assign$player[state_assign$slot == desired_slot] <- target_name
-        move_text <- paste0("Move ", target_name, " into ", desired_slot, "; bench ", desired_occ_name)
-      }
 
-      next_reserves <- choose_planner_reserves(state_roster, state_assign$player_id, final_ids)
+      move_text <- describe_slot_changes(state_assign, batch_assign, player_lookup)
+      carried_reserves <- carry_reserves_from_swaps(state_reserves, bench_pairs, batch_assign$player_id)
+      next_reserves <- choose_planner_reserves(state_roster, batch_assign$player_id, final_ids)
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
-        When = format_planner_time(final_plan$next_kickoff_utc[[i]] - 10 * 60),
+        sort_at_utc = kickoff_value - 10 * 60,
+        `Lock Window` = build_lock_window_label(group_tbl$team_abbrev[[1]], group_tbl$next_opponent[[1]], kickoff_value),
+        When = format_planner_time(kickoff_value - 10 * 60),
+        `Players Locking` = describe_locking_players(state_roster, kickoff_value),
         Move = move_text,
-        `Reserve Change` = describe_reserve_transition(state_reserves, next_reserves, player_lookup),
-        Why = if (!is.na(final_plan$next_kickoff_utc[[i]])) {
+        `Reserve Change` = describe_reserve_transition(carried_reserves, next_reserves, player_lookup),
+        Why = if (!is.na(kickoff_value)) {
           paste0(
             "Latest clean switch before ",
-            final_plan$team_abbrev[[i]],
+            group_tbl$team_abbrev[[1]],
             " v ",
-            final_plan$next_opponent[[i]] %||% "their opponent",
+            group_tbl$next_opponent[[1]] %||% "their opponent",
             " locks."
           )
-        } else if (final_plan$bye_this_round[[i]] %in% TRUE) {
+        } else if (group_tbl$bye_this_round[[1]] %in% TRUE) {
           "No kickoff this round: only move if you need the shape for disguise."
         } else {
           "No kickoff found, so make this move before the first relevant lock."
         },
-        stringsAsFactors = FALSE
+        stringsAsFactors = FALSE,
+        check.names = FALSE
       )
 
+      state_assign <- batch_assign
       state_reserves <- next_reserves
     }
 
@@ -2644,10 +2755,38 @@ server <- function(input, output, session) {
       status_lines <- c(status_lines, paste(notes, collapse = " | "))
     }
 
+    move_schedule <- if (length(move_rows)) {
+      bind_rows(move_rows) %>%
+        group_by(sort_at_utc, `Lock Window`, When, `Players Locking`) %>%
+        summarise(
+          Move = paste(unique(Move), collapse = " | "),
+          `Reserve Change` = {
+            values <- unique(`Reserve Change`)
+            values <- values[nzchar(values) & values != "No reserve change"]
+            if (length(values)) paste(values, collapse = " | ") else "No reserve change"
+          },
+          Why = paste(unique(Why), collapse = " | "),
+          .groups = "drop"
+        ) %>%
+        arrange(sort_at_utc, `Lock Window`) %>%
+        mutate(Step = row_number()) %>%
+        transmute(
+          Step,
+          `Lock Window`,
+          When,
+          `Players Locking`,
+          Move,
+          `Reserve Change`,
+          Why
+        )
+    } else {
+      data.frame()
+    }
+
     list(
       status_text = paste(status_lines, collapse = "\n"),
       starting_setup = starting_setup,
-      move_schedule = bind_rows(move_rows),
+      move_schedule = move_schedule,
       final_setup = final_setup
     )
   }, ignoreInit = TRUE)
