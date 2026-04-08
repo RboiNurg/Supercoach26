@@ -852,6 +852,14 @@ metric_card <- function(title, output_id, subtitle = NULL) {
   )
 }
 
+explainer_details <- function(summary_text, ...) {
+  tags$details(
+    class = "sc-explainer",
+    tags$summary(summary_text),
+    div(class = "sc-explainer-body", ...)
+  )
+}
+
 responsive_table <- function(output_id) {
   div(class = "table-wrap", tableOutput(output_id))
 }
@@ -1024,6 +1032,52 @@ ui <- page_navbar(
         font-family: 'Oswald', sans-serif;
         letter-spacing: 0.02em;
       }
+      .sc-explainer {
+        margin: 0.85rem 1rem 0;
+        border: 1px solid rgba(16,63,92,0.12);
+        border-radius: 16px;
+        background: rgba(248,246,239,0.92);
+        overflow: hidden;
+      }
+      .sc-explainer summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 0.85rem 1rem;
+        font-weight: 800;
+        color: #103f5c;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .sc-explainer summary::-webkit-details-marker {
+        display: none;
+      }
+      .sc-explainer summary::after {
+        content: 'Open';
+        font-size: 0.78rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #567569;
+      }
+      .sc-explainer[open] summary::after {
+        content: 'Close';
+      }
+      .sc-explainer-body {
+        padding: 0 1rem 1rem;
+      }
+      .definition-list {
+        margin: 0 0 0.85rem;
+        color: #44564f;
+        font-size: 0.92rem;
+      }
+      .definition-list dt {
+        font-weight: 800;
+        color: #103f5c;
+        margin-top: 0.6rem;
+      }
+      .definition-list dd {
+        margin-left: 0;
+      }
       .shiny-notification {
         border-radius: 16px;
         box-shadow: 0 18px 32px rgba(15, 46, 35, 0.22);
@@ -1085,6 +1139,23 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("Fixture Runway"),
       plotOutput("fixture_runway_plot", height = "340px"),
+      explainer_details(
+        "How this score is built",
+        tags$p(
+          class = "section-note",
+          "Each point is a squad-weighted average of the official fixture difficulty attached to every NRL club represented in that side's latest known squad. This is not a raw ladder ranking; it is a blended squad exposure score."
+        ),
+        tags$dl(
+          class = "definition-list",
+          tags$dt("Weighted fixture difficulty"),
+          tags$dd("Average of each represented club's next-three-round difficulty, weighted by how many players you or your opponent own from that club."),
+          tags$dt("bye:n"),
+          tags$dd("Number of rostered players on clubs with a bye in that round window."),
+          tags$dt("Why your line moves"),
+          tags$dd("It moves when your latest squad composition changes or when the official NRL draw/context changes for the clubs your squad is exposed to.")
+        ),
+        responsive_table("fixture_runway_breakdown_table")
+      ),
       card_footer(class = "section-note", "Weighted difficulty for each side's latest known squad, using each club's next scheduled NRL fixture from the official draw rather than a blind next-round jump.")
     ),
     card(
@@ -1161,6 +1232,25 @@ ui <- page_navbar(
         full_screen = TRUE,
         card_header("Upcoming Fixture Market Watchlist"),
         responsive_table("market_watch_table"),
+        explainer_details(
+          "Definitions and factor breakdown",
+          tags$p(
+            class = "section-note",
+            "This watchlist ranks players by a blended signal from recent scoring, fixture quality, team attack trend, price cycle, and injury availability. Open this panel to inspect the exact labels and score pieces."
+          ),
+          tags$dl(
+            class = "definition-list",
+            tags$dt("Category"),
+            tags$dd("Buy target = strong price momentum plus a playable fixture. Fixture play = matchup-led watch. Premium hold = elite scorer whose price may cool. Price rise watch = more value growth likely. Injury watch = currently flagged unavailable/risky. Monitor = worth tracking but not a hard push."),
+            tags$dt("Swing"),
+            tags$dd("easier_short_term = next two rounds are easier than the wider five-round runway. harder_short_term = next two are tougher. stable = no strong near-term swing."),
+            tags$dt("Why"),
+            tags$dd("Plain-language explanation chosen from the strongest contributing factor or combination of factors."),
+            tags$dt("Price Signal"),
+            tags$dd("Heuristic next-price-cycle move, not an official breakeven. It leans on recent form and the stored price trend.")
+          ),
+          responsive_table("market_watch_factor_table")
+        ),
         card_footer(class = "section-note", "Category definitions: Buy target = price upside plus playable fixture; Fixture play = matchup-driven watch; Premium hold = premium scorer whose price may cool; Injury watch = likely unavailable despite signal.")
       ),
       card(
@@ -1673,7 +1763,7 @@ server <- function(input, output, session) {
       )
   })
 
-  market_watchlist <- reactive({
+  market_watch_data <- reactive({
     data <- dashboard_data()
 
     req(
@@ -1731,12 +1821,17 @@ server <- function(input, output, session) {
       mutate(
         recent_average = coalesce(average_3_round, current_season_average, 0),
         injury_text = coalesce(zero_tackle_status_text, injury_suspension_status_text),
+        matchup_component = coalesce(next_matchup_rating, 0) / 2,
+        attack_component = pmax(coalesce(attacking_trend_last_3, 0), 0) / 6,
+        price_component = coalesce(projected_price_signal_next_round, 0) / 15000,
+        bye_penalty = if_else(bye_flag %in% TRUE, 40, 0),
+        injury_penalty = if_else(!is.na(injury_text) & nzchar(injury_text), 35, 0),
         signal_score = recent_average +
-          coalesce(next_matchup_rating, 0) / 2 +
-          pmax(coalesce(attacking_trend_last_3, 0), 0) / 6 +
-          coalesce(projected_price_signal_next_round, 0) / 15000 -
-          if_else(bye_flag %in% TRUE, 40, 0) -
-          if_else(!is.na(injury_text) & nzchar(injury_text), 35, 0)
+          matchup_component +
+          attack_component +
+          price_component -
+          bye_penalty -
+          injury_penalty
       ) %>%
       filter(
         active_flag %in% TRUE,
@@ -1750,6 +1845,12 @@ server <- function(input, output, session) {
         next_opponent,
         recent_average = round(recent_average, 1),
         matchup = round(next_matchup_rating, 1),
+        matchup_component = round(matchup_component, 2),
+        attack_component = round(attack_component, 2),
+        price_component = round(price_component, 2),
+        bye_penalty,
+        injury_penalty,
+        signal_score = round(signal_score, 2),
         category = case_when(
           !is.na(injury_text) & nzchar(injury_text) ~ "Injury watch",
           projected_price_signal_next_round >= 40000 & next_matchup_rating >= 30 ~ "Buy target",
@@ -1771,6 +1872,22 @@ server <- function(input, output, session) {
         )
       ) %>%
       slice_head(n = 14)
+  })
+
+  market_watchlist <- reactive({
+    market_watch_data() %>%
+      transmute(
+        player,
+        team,
+        next_opponent,
+        recent_average,
+        matchup,
+        category,
+        price_signal,
+        swing,
+        maturity,
+        why
+      )
   })
 
   cash_watch <- reactive({
@@ -2100,17 +2217,26 @@ server <- function(input, output, session) {
       theme(legend.position = "top")
   })
 
-  output$fixture_runway_plot <- safe_plot({
-    fixture_df <- dashboard_data()$fixture_matchup %>%
+  fixture_runway_components <- reactive({
+    dashboard_data()$fixture_matchup %>%
       inner_join(
         squad_team_mix(),
         by = "team_abbrev",
         relationship = "many-to-many"
       ) %>%
       filter(round >= current_round(), round <= current_round() + 4L) %>%
+      mutate(
+        team_difficulty = next_3_rounds_difficulty,
+        weighted_component = team_difficulty * pmax(player_n, 1)
+      ) %>%
+      filter(is.finite(team_difficulty))
+  })
+
+  output$fixture_runway_plot <- safe_plot({
+    fixture_df <- fixture_runway_components() %>%
       group_by(side, round) %>%
       summarise(
-        weighted_difficulty = weighted.mean(next_3_rounds_difficulty, w = pmax(player_n, 1), na.rm = TRUE),
+        weighted_difficulty = weighted.mean(team_difficulty, w = pmax(player_n, 1), na.rm = TRUE),
         bye_players = sum(if_else(bye_flag %in% TRUE, player_n, 0L), na.rm = TRUE),
         .groups = "drop"
       ) %>%
@@ -2126,6 +2252,23 @@ server <- function(input, output, session) {
       labs(x = "Round", y = "Weighted fixture difficulty", color = NULL) +
       theme_minimal(base_size = 12) +
       theme(legend.position = "top")
+  })
+
+  output$fixture_runway_breakdown_table <- safe_table({
+    fixture_runway_components() %>%
+      transmute(
+        Side = side,
+        Round = round,
+        Club = team_abbrev,
+        `Players From Club` = player_n,
+        Opponent = opponent,
+        `Fixture Rating` = round(team_difficulty, 2),
+        `Weighted Contribution` = round(weighted_component, 2),
+        `Short-Term Swing` = schedule_swing_indicator,
+        Bye = if_else(bye_flag %in% TRUE, "Yes", "No")
+      ) %>%
+      arrange(Side, Round, desc(`Players From Club`), desc(`Fixture Rating`)) %>%
+      slice_head(n = 24)
   })
 
   output$league_schedule_table <- safe_table({
@@ -2159,6 +2302,25 @@ server <- function(input, output, session) {
 
   output$market_watch_table <- safe_table({
     market_watchlist()
+  })
+
+  output$market_watch_factor_table <- safe_table({
+    market_watch_data() %>%
+      transmute(
+        Player = player,
+        Team = team,
+        `Next Opp` = next_opponent,
+        `Recent Avg` = recent_average,
+        `Matchup Component` = matchup_component,
+        `Attack Component` = attack_component,
+        `Price Component` = price_component,
+        `Bye Penalty` = bye_penalty,
+        `Injury Penalty` = injury_penalty,
+        `Signal Score` = signal_score,
+        Category = category,
+        Swing = swing,
+        Why = why
+      )
   })
 
   output$cash_watch_table <- safe_table({
