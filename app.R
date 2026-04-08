@@ -1488,6 +1488,19 @@ planner_lock_step_assignment <- function(players, slots, current_assign, current
   updated
 }
 
+as_planner_utc <- function(x) {
+  if (is.null(x) || length(x) == 0 || all(is.na(x))) {
+    return(as.POSIXct(NA, tz = "UTC"))
+  }
+  if (inherits(x, c("POSIXct", "POSIXt"))) {
+    return(as.POSIXct(x, tz = "UTC"))
+  }
+  if (is.numeric(x)) {
+    return(as.POSIXct(x, origin = "1970-01-01", tz = "UTC"))
+  }
+  as.POSIXct(x, tz = "UTC")
+}
+
 format_planner_time <- function(x, fallback = "Before first relevant lock") {
   if (is.null(x) || length(x) == 0) {
     return(fallback)
@@ -1497,13 +1510,7 @@ format_planner_time <- function(x, fallback = "Before first relevant lock") {
     if (is.na(one_x)) {
       return(fallback)
     }
-    one_time <- if (inherits(one_x, c("POSIXct", "POSIXt"))) {
-      as.POSIXct(one_x, tz = "UTC")
-    } else if (is.numeric(one_x)) {
-      as.POSIXct(one_x, origin = "1970-01-01", tz = "UTC")
-    } else {
-      as.POSIXct(one_x, tz = "UTC")
-    }
+    one_time <- as_planner_utc(one_x)
     formatted <- format(one_time, "%a %I:%M %p %Z", tz = "Australia/Sydney")
     sub(" 0", " ", formatted, fixed = TRUE)
   }, character(1))
@@ -1750,6 +1757,56 @@ describe_planner_state_changes <- function(from_assign, from_bench_ids, to_assig
   }
 
   list(text = paste(steps, collapse = " | "), bench_ids = current_bench)
+}
+
+planner_force_slots_to_target <- function(current_assign, current_bench_ids, target_assign, target_slots) {
+  if (is.null(current_assign) || !nrow(current_assign) || is.null(target_assign) || !nrow(target_assign)) {
+    return(list(assign = current_assign, bench_ids = current_bench_ids %||% integer()))
+  }
+
+  target_slots <- intersect(target_slots %||% character(), target_assign$slot)
+  if (!length(target_slots)) {
+    return(list(assign = current_assign, bench_ids = current_bench_ids %||% integer()))
+  }
+
+  current_field <- setNames(current_assign$player_id, current_assign$slot)
+  current_bench <- current_bench_ids %||% integer()
+  target_field <- setNames(target_assign$player_id, target_assign$slot)
+
+  for (slot_name in target_slots) {
+    desired_id <- target_field[[slot_name]]
+    current_id <- current_field[[slot_name]]
+
+    if (is.na(desired_id) || identical(current_id, desired_id)) {
+      next
+    }
+
+    if (desired_id %in% current_bench) {
+      bench_idx <- match(desired_id, current_bench)
+      current_bench[[bench_idx]] <- current_id
+      current_field[[slot_name]] <- desired_id
+      next
+    }
+
+    source_slot <- names(current_field)[match(desired_id, current_field)]
+    if (length(source_slot) && !is.na(source_slot) && nzchar(source_slot)) {
+      source_id <- current_field[[source_slot]]
+      current_field[[source_slot]] <- current_id
+      current_field[[slot_name]] <- source_id
+    }
+  }
+
+  name_lookup <- c(
+    setNames(current_assign$player, as.character(current_assign$player_id)),
+    setNames(target_assign$player, as.character(target_assign$player_id))
+  )
+  name_lookup <- name_lookup[!duplicated(names(name_lookup))]
+
+  updated_assign <- current_assign
+  updated_assign$player_id <- unname(current_field[updated_assign$slot])
+  updated_assign$player <- unname(name_lookup[as.character(updated_assign$player_id)])
+
+  list(assign = updated_assign, bench_ids = current_bench)
 }
 
 prepare_planner_roster <- function(
@@ -3235,7 +3292,7 @@ server <- function(input, output, session) {
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
-        sort_at_utc = trade_deadline,
+        sort_at_utc = as_planner_utc(trade_deadline),
         `Lock Window` = if (!is.na(trade_deadline)) build_lock_window_label(
           trades_complete$in_team[[1]] %||% NA_character_,
           future_roster$next_opponent[match(trades_complete$in_id[[1]], future_roster$player_id)] %||% NA_character_,
@@ -3269,18 +3326,42 @@ server <- function(input, output, session) {
     for (group_name in names(final_plan_groups)) {
       group_tbl <- final_plan_groups[[group_name]]
       kickoff_value <- group_tbl$next_kickoff_utc[[1]]
-      required_ids <- final_plan %>%
-        filter(!is.na(next_kickoff_utc), next_kickoff_utc <= kickoff_value) %>%
-        pull(player_id)
 
-      batch_assign <- planner_lock_step_assignment(
-        players = state_roster,
-        slots = slots,
+      current_with_times <- state_assign %>%
+        left_join(
+          state_roster %>%
+            select(player_id, next_kickoff_utc),
+          by = "player_id"
+        ) %>%
+        mutate(target_player_id = final_assign$player_id[match(slot, final_assign$slot)])
+
+      target_slots_due_now <- final_assign %>%
+        left_join(
+          state_roster %>%
+            select(player_id, next_kickoff_utc),
+          by = "player_id"
+        ) %>%
+        filter(!is.na(next_kickoff_utc), next_kickoff_utc <= kickoff_value) %>%
+        pull(slot)
+
+      wrong_current_slots_due_now <- current_with_times %>%
+        filter(
+          !is.na(next_kickoff_utc),
+          next_kickoff_utc == kickoff_value,
+          player_id != target_player_id
+        ) %>%
+        pull(slot)
+
+      target_slots <- union(target_slots_due_now, wrong_current_slots_due_now)
+
+      forced_state <- planner_force_slots_to_target(
         current_assign = state_assign,
-        current_kickoff = kickoff_value,
-        required_ids = required_ids,
-        target_ids = final_ids
+        current_bench_ids = state_bench_ids,
+        target_assign = final_assign,
+        target_slots = target_slots
       )
+
+      batch_assign <- forced_state$assign
 
       if (is.null(batch_assign) || !nrow(batch_assign)) {
         next
@@ -3290,7 +3371,7 @@ server <- function(input, output, session) {
         players = state_roster,
         field_ids = batch_assign$player_id,
         reserve_ids = state_reserves,
-        current_bench_ids = state_bench_ids
+        current_bench_ids = forced_state$bench_ids
       )
       move_state <- describe_planner_state_changes(
         from_assign = state_assign,
@@ -3320,7 +3401,7 @@ server <- function(input, output, session) {
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
-        sort_at_utc = kickoff_value - 10 * 60,
+        sort_at_utc = as_planner_utc(kickoff_value - 10 * 60),
         `Lock Window` = build_lock_window_label(group_tbl$team_abbrev[[1]], group_tbl$next_opponent[[1]], kickoff_value),
         When = format_planner_time(kickoff_value - 10 * 60),
         `Players Locking` = describe_locking_players(state_roster, kickoff_value),
