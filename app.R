@@ -1922,6 +1922,82 @@ planner_reachable_target <- function(roster, slots, current_assign, current_benc
   )
 }
 
+parse_history_numeric <- function(history_string) {
+  if (length(history_string) == 0 || is.na(history_string) || !nzchar(trimws(history_string))) {
+    return(numeric())
+  }
+
+  values <- strsplit(as.character(history_string), "\\s*,\\s*")[[1]]
+  values <- trimws(values)
+  values[values %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  suppressWarnings(as.numeric(values))
+}
+
+planner_recent_form_metrics <- function(
+  points_history,
+  minute_history,
+  season_average = NA_real_,
+  average_3_round = NA_real_,
+  average_5_round = NA_real_,
+  risk_band = NA_character_,
+  expected_return = NA_character_,
+  injury_text = NA_character_
+) {
+  points <- parse_history_numeric(points_history)
+  minutes <- parse_history_numeric(minute_history)
+  history_n <- max(length(points), length(minutes))
+
+  if (history_n == 0) {
+    return(list(
+      recent3 = suppressWarnings(as.numeric(dplyr::coalesce(average_3_round, season_average, 0))),
+      recent5 = suppressWarnings(as.numeric(dplyr::coalesce(average_5_round, season_average, average_3_round, 0))),
+      trailing_absence = 0,
+      absence_caution_penalty = 0
+    ))
+  }
+
+  if (length(points) < history_n) {
+    points <- c(points, rep(NA_real_, history_n - length(points)))
+  }
+  if (length(minutes) < history_n) {
+    minutes <- c(minutes, rep(NA_real_, history_n - length(minutes)))
+  }
+
+  active_mask <- !is.na(points) & (is.na(minutes) | minutes > 0)
+  active_points <- points[active_mask]
+
+  trailing_absence <- 0L
+  for (idx in seq(history_n, 1L)) {
+    played_flag <- !is.na(points[[idx]]) && (is.na(minutes[[idx]]) || minutes[[idx]] > 0)
+    if (played_flag) {
+      break
+    }
+    trailing_absence <- trailing_absence + 1L
+  }
+
+  recent3_active <- if (length(active_points)) mean(tail(active_points, min(3L, length(active_points))), na.rm = TRUE) else NA_real_
+  recent5_active <- if (length(active_points)) mean(tail(active_points, min(5L, length(active_points))), na.rm = TRUE) else NA_real_
+
+  context_text <- tolower(paste(risk_band, expected_return, injury_text, collapse = " "))
+  cautious_return_flag <- grepl(
+    "injur|concussion|hamstring|groin|knee|ankle|susp|return|origin",
+    context_text
+  )
+
+  absence_caution_penalty <- if (cautious_return_flag && trailing_absence > 0) {
+    min(6, trailing_absence * 2)
+  } else {
+    0
+  }
+
+  list(
+    recent3 = suppressWarnings(as.numeric(dplyr::coalesce(recent3_active, average_3_round, season_average, 0))),
+    recent5 = suppressWarnings(as.numeric(dplyr::coalesce(recent5_active, average_5_round, season_average, recent3_active, 0))),
+    trailing_absence = trailing_absence,
+    absence_caution_penalty = absence_caution_penalty
+  )
+}
+
 prepare_planner_roster <- function(
   base_players,
   master_player,
@@ -2002,6 +2078,8 @@ prepare_planner_roster <- function(
           current_season_average,
           average_3_round,
           average_5_round,
+          points_history,
+          minute_history,
           ownership_percentage,
           total_points,
           games_played,
@@ -2043,7 +2121,25 @@ prepare_planner_roster <- function(
       player = coalesce(lookup_name, master_name, full_name),
       team_abbrev = coalesce(team_abbrev, lookup_team_abbrev, master_team_abbrev),
       current_position = coalesce(position, positions_string),
-      positions_string = coalesce(positions_string, current_position)
+      positions_string = coalesce(positions_string, current_position),
+      risk_band_seed = coalesce(zero_tackle_risk_band, availability_risk_band, "low"),
+      injury_text_seed = coalesce(zero_tackle_status_text, injury_suspension_status_text, injury_detail, master_status),
+      expected_return_seed = coalesce(zero_tackle_expected_return, availability_expected_return, master_expected_return),
+      history_metrics = Map(
+        planner_recent_form_metrics,
+        points_history,
+        minute_history,
+        current_season_average,
+        average_3_round,
+        average_5_round,
+        risk_band_seed,
+        expected_return_seed,
+        injury_text_seed
+      ),
+      recent_average_adjusted = vapply(history_metrics, `[[`, numeric(1), "recent3"),
+      recent_form_baseline_adjusted = vapply(history_metrics, `[[`, numeric(1), "recent5"),
+      trailing_absence_rounds = vapply(history_metrics, `[[`, numeric(1), "trailing_absence"),
+      absence_caution_penalty = vapply(history_metrics, `[[`, numeric(1), "absence_caution_penalty")
     ) %>%
     left_join(next_fixture_lookup, by = "team_abbrev") %>%
     left_join(attack_lookup, by = "team_abbrev") %>%
@@ -2053,18 +2149,18 @@ prepare_planner_roster <- function(
       eligibility = lapply(seq_len(n()), function(i) planner_player_eligibility(positions_string[[i]], current_position[[i]])),
       next_kickoff_utc = as.POSIXct(next_kickoff_utc, tz = "UTC"),
       bye_this_round = !is.na(upcoming_round) & upcoming_round > current_round,
-      risk_band = coalesce(zero_tackle_risk_band, availability_risk_band, "low"),
-      injury_text = coalesce(zero_tackle_status_text, injury_suspension_status_text, injury_detail, master_status),
-      expected_return = coalesce(zero_tackle_expected_return, availability_expected_return, master_expected_return),
+      risk_band = risk_band_seed,
+      injury_text = injury_text_seed,
+      expected_return = expected_return_seed,
       primary_position = case_when(
         grepl("FLB|HFB|5/8|HOK", coalesce(positions_string, "")) ~ "spine",
         grepl("CTW", coalesce(positions_string, "")) ~ "edge",
         grepl("FRF|2RF", coalesce(positions_string, "")) ~ "middle",
         TRUE ~ "utility"
       ),
-      recent_average = coalesce(projected_score_this_week_lookup, average_3_round, current_season_average, 0),
-      form_baseline = coalesce(average_5_round, current_season_average, recent_average, 0),
-      form_delta = coalesce(average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
+      recent_average = coalesce(projected_score_this_week_lookup, recent_average_adjusted, average_3_round, current_season_average, 0),
+      form_baseline = coalesce(recent_form_baseline_adjusted, average_5_round, current_season_average, recent_average, 0),
+      form_delta = coalesce(recent_average_adjusted, average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
       matchup_rating = coalesce(next_matchup_rating, next_matchup_rating_team, 24),
       attack_trend = coalesce(attacking_trend_last_3, 0),
       opponent_defense_bonus = pmax(coalesce(opponent_defensive_trend_last_3, 18) - 18, 0),
@@ -2122,7 +2218,8 @@ prepare_planner_roster <- function(
         starting_bonus -
         risk_penalty -
         inactive_penalty -
-        bye_penalty
+        bye_penalty -
+        absence_caution_penalty
     ) %>%
     mutate(
       player = coalesce(player, paste("Player", player_id)),
