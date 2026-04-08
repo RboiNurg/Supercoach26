@@ -127,6 +127,9 @@ load_dashboard_data <- function() {
     player_id_lookup = read_required_rds(file.path(data_dir, "player_id_lookup.rds")),
     player_price_history = read_required_rds(file.path(data_dir, "player_price_history_sc.rds")),
     actual_trade_history = read_required_rds(file.path(data_dir, "actual_trade_history.rds")),
+    league_trade_log = read_optional_rds(file.path(data_dir, "league_trade_log.rds")),
+    league_trade_round_summary = read_optional_rds(file.path(data_dir, "league_trade_round_summary.rds")),
+    league_trade_team_summary = read_optional_rds(file.path(data_dir, "league_trade_team_summary.rds")),
     availability_risk = read_required_rds(file.path(data_dir, "availability_risk_table.rds")),
     squad_round_enriched = read_required_rds(file.path(data_dir, "squad_round_enriched.rds")),
     cash_generation = read_required_rds(file.path(data_dir, "cash_generation_model.rds")),
@@ -1332,6 +1335,10 @@ server <- function(input, output, session) {
 
   trade_log <- reactive({
     data <- dashboard_data()
+    if (!is.null(data$league_trade_log) && nrow(data$league_trade_log)) {
+      return(data$league_trade_log)
+    }
+
     build_trade_log(
       team_players_latest = data$team_players_latest,
       player_id_lookup = data$player_id_lookup,
@@ -1342,10 +1349,18 @@ server <- function(input, output, session) {
   })
 
   trade_rounds <- reactive({
+    data <- dashboard_data()
+    if (!is.null(data$league_trade_round_summary) && nrow(data$league_trade_round_summary)) {
+      return(data$league_trade_round_summary)
+    }
     trade_round_summary(trade_log())
   })
 
   trade_team_totals <- reactive({
+    data <- dashboard_data()
+    if (!is.null(data$league_trade_team_summary) && nrow(data$league_trade_team_summary)) {
+      return(data$league_trade_team_summary)
+    }
     trade_team_summary(trade_log())
   })
 

@@ -20,6 +20,9 @@ This script writes the following `.rds` files under the league-specific data fol
 - `team_round_stats_history.rds`
 - `actual_trade_history.rds`
 - `inferred_changes.rds`
+- `league_trade_log.rds`
+- `league_trade_round_summary.rds`
+- `league_trade_team_summary.rds`
 - `competition_state_history.rds`
 - `nrl_fixture_source_history.rds`
 - `nrl_team_context_history.rds`
@@ -88,6 +91,9 @@ path_team_round_signatures <- file.path(data_dir, "team_round_signatures.rds")
 path_team_round_stats_history <- file.path(data_dir, "team_round_stats_history.rds")
 path_actual_trade_history <- file.path(data_dir, "actual_trade_history.rds")
 path_inferred_changes <- file.path(data_dir, "inferred_changes.rds")
+path_league_trade_log <- file.path(data_dir, "league_trade_log.rds")
+path_league_trade_round_summary <- file.path(data_dir, "league_trade_round_summary.rds")
+path_league_trade_team_summary <- file.path(data_dir, "league_trade_team_summary.rds")
 path_competition_state_history <- file.path(data_dir, "competition_state_history.rds")
 path_nrl_fixture_source_history <- file.path(data_dir, "nrl_fixture_source_history.rds")
 path_nrl_team_context_history <- file.path(data_dir, "nrl_team_context_history.rds")
@@ -1242,6 +1248,223 @@ latest_team_round_stats <- team_round_stats_history %>%
   slice_max(run_ts, n = 1, with_ties = FALSE) %>%
   ungroup()
 
+team_lookup_from_ladder <- function(ladder_history) {
+  if (is.null(ladder_history) || !nrow(ladder_history)) {
+    return(tibble())
+  }
+
+  ladder_history %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(user_team_id, team_name, coach_name, is_me)
+}
+
+pair_trade_rows <- function(players_out, players_in) {
+  max_len <- max(length(players_out), length(players_in))
+  if (max_len == 0) {
+    return(tibble())
+  }
+
+  tibble(
+    trade_index = seq_len(max_len),
+    sell_player_id = c(players_out, rep(NA_integer_, max_len - length(players_out))),
+    buy_player_id = c(players_in, rep(NA_integer_, max_len - length(players_in)))
+  )
+}
+
+build_trade_log <- function(
+  team_players_latest,
+  player_id_lookup = NULL,
+  player_price_history = NULL,
+  ladder_history = NULL,
+  actual_trade_history = NULL,
+  run_ts = Sys.time()
+) {
+  if (is.null(team_players_latest) || !nrow(team_players_latest)) {
+    return(tibble())
+  }
+
+  roster_by_round <- team_players_latest %>%
+    distinct(user_team_id, round, player_id) %>%
+    group_by(user_team_id, round) %>%
+    summarise(player_ids = list(sort(unique(player_id))), .groups = "drop") %>%
+    arrange(user_team_id, round) %>%
+    group_by(user_team_id) %>%
+    mutate(
+      prev_round = lag(round),
+      prev_player_ids = lag(player_ids)
+    ) %>%
+    ungroup()
+
+  inferred_rounds <- roster_by_round %>%
+    filter(!is.na(prev_round)) %>%
+    rowwise() %>%
+    mutate(
+      players_in = list(setdiff(player_ids, prev_player_ids)),
+      players_out = list(setdiff(prev_player_ids, player_ids))
+    ) %>%
+    ungroup()
+
+  inferred_rows <- bind_rows(lapply(seq_len(nrow(inferred_rounds)), function(idx) {
+    row <- inferred_rounds[idx, ]
+    pairs <- pair_trade_rows(row$players_out[[1]], row$players_in[[1]])
+    if (!nrow(pairs)) {
+      return(NULL)
+    }
+
+    pairs %>%
+      mutate(
+        run_ts = run_ts,
+        user_team_id = row$user_team_id[[1]],
+        round = row$round[[1]],
+        price_round = max(1L, row$round[[1]] - 1L),
+        trade_source = "inferred_round_delta"
+      )
+  }))
+
+  actual_rows <- tibble()
+  actual_rounds <- tibble()
+  if (!is.null(actual_trade_history) && nrow(actual_trade_history)) {
+    actual_rows <- actual_trade_history %>%
+      transmute(
+        run_ts = coalesce(run_ts, !!run_ts),
+        user_team_id,
+        round,
+        price_round = pmax(round - 1L, 1L),
+        trade_source,
+        sell_player_id,
+        buy_player_id
+      )
+    actual_rounds <- actual_rows %>% distinct(user_team_id, round)
+  }
+
+  if (nrow(actual_rounds) && nrow(inferred_rows)) {
+    inferred_rows <- inferred_rows %>%
+      anti_join(actual_rounds, by = c("user_team_id", "round"))
+  }
+
+  trade_log <- bind_rows(actual_rows, inferred_rows)
+  if (!nrow(trade_log)) {
+    return(tibble())
+  }
+
+  if (!is.null(player_id_lookup) && nrow(player_id_lookup)) {
+    trade_log <- trade_log %>%
+      left_join(
+        player_id_lookup %>%
+          select(
+            buy_player_id = player_id,
+            buy_player_name = full_name,
+            buy_team_abbrev = team_abbrev
+          ),
+        by = "buy_player_id"
+      ) %>%
+      left_join(
+        player_id_lookup %>%
+          select(
+            sell_player_id = player_id,
+            sell_player_name = full_name,
+            sell_team_abbrev = team_abbrev
+          ),
+        by = "sell_player_id"
+      )
+  }
+
+  if (!is.null(player_price_history) && nrow(player_price_history)) {
+    trade_log <- trade_log %>%
+      left_join(
+        player_price_history %>%
+          select(
+            buy_player_id = player_id,
+            price_round = round,
+            buy_price = price
+          ),
+        by = c("buy_player_id", "price_round")
+      ) %>%
+      left_join(
+        player_price_history %>%
+          select(
+            sell_player_id = player_id,
+            price_round = round,
+            sell_price = price
+          ),
+        by = c("sell_player_id", "price_round")
+      )
+  }
+
+  if (!is.null(ladder_history) && nrow(ladder_history)) {
+    trade_log <- trade_log %>%
+      left_join(team_lookup_from_ladder(ladder_history), by = "user_team_id")
+  }
+
+  trade_log %>%
+    arrange(round, user_team_id, trade_source)
+}
+
+trade_round_summary <- function(trade_log) {
+  if (is.null(trade_log) || !nrow(trade_log)) {
+    return(tibble())
+  }
+
+  trade_log %>%
+    group_by(user_team_id, round) %>%
+    summarise(
+      detected_changes = n(),
+      actual_moves = sum(trade_source == "actual_api", na.rm = TRUE),
+      inferred_moves = sum(trade_source != "actual_api", na.rm = TRUE),
+      actual_trades = list(tibble(
+        buy_player_id = buy_player_id[trade_source == "actual_api"],
+        sell_player_id = sell_player_id[trade_source == "actual_api"],
+        buy_player_name = buy_player_name[trade_source == "actual_api"],
+        sell_player_name = sell_player_name[trade_source == "actual_api"],
+        buy_price = buy_price[trade_source == "actual_api"],
+        sell_price = sell_price[trade_source == "actual_api"],
+        trade_source = trade_source[trade_source == "actual_api"]
+      )),
+      inferred_trade_pairs = list(tibble(
+        buy_player_id = buy_player_id[trade_source != "actual_api"],
+        sell_player_id = sell_player_id[trade_source != "actual_api"],
+        buy_player_name = buy_player_name[trade_source != "actual_api"],
+        sell_player_name = sell_player_name[trade_source != "actual_api"],
+        buy_price = buy_price[trade_source != "actual_api"],
+        sell_price = sell_price[trade_source != "actual_api"],
+        trade_source = trade_source[trade_source != "actual_api"]
+      )),
+      .groups = "drop"
+    )
+}
+
+trade_team_summary <- function(trade_log) {
+  round_summary <- trade_round_summary(trade_log)
+  if (!nrow(round_summary)) {
+    return(tibble())
+  }
+
+  round_summary %>%
+    group_by(user_team_id) %>%
+    summarise(
+      cumulative_detected_changes = sum(detected_changes, na.rm = TRUE),
+      cumulative_actual_moves = sum(actual_moves, na.rm = TRUE),
+      cumulative_inferred_moves = sum(inferred_moves, na.rm = TRUE),
+      latest_trade_round = max(round, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+league_trade_log <- build_trade_log(
+  team_players_latest = team_players_latest,
+  player_id_lookup = player_id_lookup,
+  player_price_history = player_price_history_sc,
+  ladder_history = ladder_history,
+  actual_trade_history = actual_trade_history,
+  run_ts = run_ts
+)
+
+league_trade_round_summary <- trade_round_summary(league_trade_log)
+league_trade_team_summary <- trade_team_summary(league_trade_log)
+
 # This table tracks SuperCoach league opponents and inferred fantasy trades, not real NRL matchups.
 opponent_behaviour_history <- team_players_latest %>%
   group_by(user_team_id, round) %>%
@@ -1250,30 +1473,25 @@ opponent_behaviour_history <- team_players_latest %>%
     .groups = "drop"
   ) %>%
   left_join(
-    inferred_changes %>%
-      group_by(user_team_id, round) %>%
-      summarise(
-        detected_run_ts = max(to_run_ts, na.rm = TRUE),
-        inferred_trade_events = sum((coalesce(players_out_n, 0L) + coalesce(players_in_n, 0L)) > 0L, na.rm = TRUE),
-        inferred_players_out = sum(players_out_n, na.rm = TRUE),
-        inferred_players_in = sum(players_in_n, na.rm = TRUE),
-        inferred_trade_pairs = list(bind_rows(inferred_trade_pairs)),
-        .groups = "drop"
+    league_trade_round_summary %>%
+      mutate(
+        detected_run_ts = run_ts,
+        inferred_trade_events = inferred_moves,
+        inferred_players_out = map_int(
+          inferred_trade_pairs,
+          ~ sum(!is.na(.x$sell_player_id))
+        ),
+        inferred_players_in = map_int(
+          inferred_trade_pairs,
+          ~ sum(!is.na(.x$buy_player_id))
+        ),
+        actual_trade_count = actual_moves
+      ) %>%
+      select(
+        user_team_id, round, detected_run_ts, inferred_trade_events,
+        inferred_players_out, inferred_players_in, inferred_trade_pairs,
+        actual_trade_count, actual_trades
       ),
-    by = c("user_team_id", "round")
-  ) %>%
-  left_join(
-    actual_trade_history %>%
-      group_by(user_team_id, round) %>%
-      summarise(
-    actual_trade_count = n(),
-    actual_trades = list(tibble(
-      buy_player_id = buy_player_id,
-      sell_player_id = sell_player_id,
-      trade_source = trade_source
-    )),
-    .groups = "drop"
-  ),
     by = c("user_team_id", "round")
   ) %>%
   left_join(
@@ -1672,6 +1890,9 @@ saveRDS(ladder_history, path_ladder_history)
 saveRDS(fixture_triggers, path_fixture_triggers)
 saveRDS(master_player_round_latest, path_master_player_round_latest)
 saveRDS(opponent_behaviour_history, path_opponent_behaviour_history)
+saveRDS(league_trade_log, path_league_trade_log)
+saveRDS(league_trade_round_summary, path_league_trade_round_summary)
+saveRDS(league_trade_team_summary, path_league_trade_team_summary)
 saveRDS(squad_round_enriched, path_squad_round_enriched)
 saveRDS(game_rules_round_state, path_game_rules_round_state)
 saveRDS(player_scoring_component_history, path_player_scoring_component_history)
@@ -1701,6 +1922,9 @@ major_tables <- list(
   cash_generation_model = cash_generation_model,
   squad_round_enriched = squad_round_enriched,
   opponent_behaviour_history = opponent_behaviour_history,
+  league_trade_log = league_trade_log,
+  league_trade_round_summary = league_trade_round_summary,
+  league_trade_team_summary = league_trade_team_summary,
   availability_risk_table = availability_risk_table,
   structure_health_table = structure_health_table,
   long_horizon_planning_table = long_horizon_planning_table
@@ -1753,6 +1977,9 @@ list(
   cash_generation_model = cash_generation_model,
   squad_round_enriched = squad_round_enriched,
   opponent_behaviour_history = opponent_behaviour_history,
+  league_trade_log = league_trade_log,
+  league_trade_round_summary = league_trade_round_summary,
+  league_trade_team_summary = league_trade_team_summary,
   cash_by_round = cash_by_round,
   ladder_value_compare = ladder_value_compare,
   fixture_triggers = fixture_triggers,

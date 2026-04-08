@@ -657,6 +657,9 @@ build_gpt_prompt_pack <- function(
   player_id_lookup <- read_optional_rds(file.path(data_dir, "player_id_lookup.rds"))
   player_price_history <- read_optional_rds(file.path(data_dir, "player_price_history_sc.rds"))
   actual_trade_history <- read_optional_rds(file.path(data_dir, "actual_trade_history.rds"))
+  league_trade_log <- read_optional_rds(file.path(data_dir, "league_trade_log.rds"))
+  league_trade_round_summary <- read_optional_rds(file.path(data_dir, "league_trade_round_summary.rds"))
+  league_trade_team_summary <- read_optional_rds(file.path(data_dir, "league_trade_team_summary.rds"))
   availability_risk <- read_optional_rds(file.path(data_dir, "availability_risk_table.rds"))
   squad_round_enriched <- read_optional_rds(file.path(data_dir, "squad_round_enriched.rds"))
   cash_generation <- read_optional_rds(file.path(data_dir, "cash_generation_model.rds"))
@@ -694,9 +697,21 @@ build_gpt_prompt_pack <- function(
   structure_snapshot <- latest_team_structure(structure_health)
   team_stats_snapshot <- latest_team_round_stats(team_round_stats_history)
   zero_tackle_injuries <- fetch_zero_tackle_injuries(player_id_lookup, current_round)
-  trade_log <- build_trade_log(team_players_latest, player_id_lookup, player_price_history, ladder_history, actual_trade_history)
-  trade_team_totals <- trade_team_summary(trade_log)
-  trade_rounds <- trade_round_summary(trade_log)
+  trade_log <- if (!is.null(league_trade_log) && nrow(league_trade_log)) {
+    league_trade_log
+  } else {
+    build_trade_log(team_players_latest, player_id_lookup, player_price_history, ladder_history, actual_trade_history)
+  }
+  trade_team_totals <- if (!is.null(league_trade_team_summary) && nrow(league_trade_team_summary)) {
+    league_trade_team_summary
+  } else {
+    trade_team_summary(trade_log)
+  }
+  trade_rounds <- if (!is.null(league_trade_round_summary) && nrow(league_trade_round_summary)) {
+    league_trade_round_summary
+  } else {
+    trade_round_summary(trade_log)
+  }
   live_fixture_lookup <- next_team_fixture_lookup(
     nrl_fixture_source_history = nrl_fixture_source_history,
     fixture_matchup = fixture_matchup

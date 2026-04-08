@@ -1,6 +1,6 @@
 # SuperCoach Weekly Analysis Pack
 
-- Generated at: 2026-04-08 02:16:40 AEST
+- Generated at: 2026-04-08 11:45:17 AEST
 - League ID: 21064
 - Current round: 6
 - Latest squad pulls: you R6, opponent R5
