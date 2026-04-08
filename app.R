@@ -937,6 +937,27 @@ split_position_tokens <- function(x) {
   unique(tokens)
 }
 
+planner_real_position_tokens <- function(...) {
+  tokens <- unique(unlist(lapply(list(...), split_position_tokens), use.names = FALSE))
+  tokens <- tokens[tokens %in% c("HOK", "FRF", "2RF", "HFB", "5/8", "CTW", "FLB")]
+  tokens[nzchar(tokens)]
+}
+
+planner_position_profile <- function(...) {
+  tokens <- planner_real_position_tokens(...)
+
+  if (any(tokens %in% c("FLB", "HFB", "5/8", "HOK"))) {
+    return("spine")
+  }
+  if (any(tokens %in% c("CTW"))) {
+    return("edge")
+  }
+  if (any(tokens %in% c("FRF", "2RF"))) {
+    return("middle")
+  }
+  "utility"
+}
+
 planner_player_eligibility <- function(positions_string = NA_character_, fallback_position = NA_character_) {
   tokens <- unique(c(split_position_tokens(positions_string), split_position_tokens(fallback_position)))
   tokens[nzchar(tokens)]
@@ -2122,6 +2143,14 @@ prepare_planner_roster <- function(
       team_abbrev = coalesce(team_abbrev, lookup_team_abbrev, master_team_abbrev),
       current_position = coalesce(position, positions_string),
       positions_string = coalesce(positions_string, current_position),
+      slot_position_seed = vapply(
+        seq_len(n()),
+        function(i) {
+          tokens <- planner_real_position_tokens(current_position[[i]])
+          paste(tokens, collapse = "/")
+        },
+        character(1)
+      ),
       risk_band_seed = coalesce(zero_tackle_risk_band, availability_risk_band, "low"),
       injury_text_seed = coalesce(zero_tackle_status_text, injury_suspension_status_text, injury_detail, master_status),
       expected_return_seed = coalesce(zero_tackle_expected_return, availability_expected_return, master_expected_return),
@@ -2141,23 +2170,41 @@ prepare_planner_roster <- function(
       trailing_absence_rounds = vapply(history_metrics, `[[`, numeric(1), "trailing_absence"),
       absence_caution_penalty = vapply(history_metrics, `[[`, numeric(1), "absence_caution_penalty")
     ) %>%
+    group_by(player_id) %>%
+    mutate(
+      player_slot_positions = {
+        tokens <- unique(unlist(lapply(current_position, planner_real_position_tokens), use.names = FALSE))
+        paste(tokens, collapse = "/")
+      }
+    ) %>%
+    ungroup() %>%
     left_join(next_fixture_lookup, by = "team_abbrev") %>%
     left_join(attack_lookup, by = "team_abbrev") %>%
     left_join(opponent_defense_lookup, by = "next_opponent") %>%
     left_join(projection_lookup, by = "player_id") %>%
     mutate(
+      scoring_positions_string = vapply(
+        seq_len(n()),
+        function(i) {
+          tokens <- planner_real_position_tokens(
+            positions_string[[i]],
+            player_slot_positions[[i]],
+            current_position[[i]]
+          )
+          if (!length(tokens)) {
+            tokens <- split_position_tokens(current_position[[i]])
+          }
+          paste(tokens, collapse = "/")
+        },
+        character(1)
+      ),
       eligibility = lapply(seq_len(n()), function(i) planner_player_eligibility(positions_string[[i]], current_position[[i]])),
       next_kickoff_utc = as.POSIXct(next_kickoff_utc, tz = "UTC"),
       bye_this_round = !is.na(upcoming_round) & upcoming_round > current_round,
       risk_band = risk_band_seed,
       injury_text = injury_text_seed,
       expected_return = expected_return_seed,
-      primary_position = case_when(
-        grepl("FLB|HFB|5/8|HOK", coalesce(positions_string, "")) ~ "spine",
-        grepl("CTW", coalesce(positions_string, "")) ~ "edge",
-        grepl("FRF|2RF", coalesce(positions_string, "")) ~ "middle",
-        TRUE ~ "utility"
-      ),
+      primary_position = vapply(seq_len(n()), function(i) planner_position_profile(scoring_positions_string[[i]], positions_string[[i]], current_position[[i]]), character(1)),
       recent_average = coalesce(projected_score_this_week_lookup, recent_average_adjusted, average_3_round, current_season_average, 0),
       form_baseline = coalesce(recent_form_baseline_adjusted, average_5_round, current_season_average, recent_average, 0),
       form_delta = coalesce(recent_average_adjusted, average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
