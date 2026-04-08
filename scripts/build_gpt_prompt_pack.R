@@ -1484,6 +1484,56 @@ build_gpt_prompt_pack <- function(
     "Total Value", "Squad value plus cash in bank."
   )
 
+  current_player_prices_table <- master_player %>%
+    transmute(
+      player_id,
+      player = full_name,
+      team,
+      positions,
+      current_price = fmt_money(current_price),
+      breakeven = fmt_number(breakeven, 1),
+      season_average = fmt_number(current_season_average, 1),
+      average_3_round = fmt_number(average_3_round, 1),
+      average_5_round = fmt_number(average_5_round, 1),
+      total_points = fmt_number(total_points, 1),
+      games_played = fmt_int(games_played),
+      ownership_percentage = fmt_number(ownership_percentage, 1),
+      played_status,
+      status = coalesce(status, injury_detail),
+      expected_return,
+      goal_kicking_status,
+      starting_status,
+      locked_flag,
+      active_flag
+    ) %>%
+    arrange(desc(current_price), player)
+
+  current_player_prices_csv <- master_player %>%
+    transmute(
+      player_id,
+      full_name,
+      team,
+      positions,
+      current_price,
+      breakeven,
+      current_season_average,
+      average_3_round,
+      average_5_round,
+      total_points,
+      games_played,
+      ownership_percentage,
+      played_status,
+      status,
+      injury_detail,
+      expected_return,
+      role_tag,
+      goal_kicking_status,
+      starting_status,
+      locked_flag,
+      active_flag
+    ) %>%
+    arrange(desc(current_price), full_name)
+
   coverage_gaps <- checklist_coverage %>%
     filter(status != "implemented") %>%
     select(checklist_item, status, notes)
@@ -1647,6 +1697,9 @@ build_gpt_prompt_pack <- function(
     "## Key metric glossary",
     markdown_table(metric_glossary, max_rows = 20),
     "",
+    "## Full current player prices table",
+    markdown_table(current_player_prices_table, max_rows = nrow(current_player_prices_table)),
+    "",
     "## Required GPT response shape",
     "1. State the strategic posture for this round in one line: cash build, consolidation, aggression, pre-Origin prep, bye prep, or head-to-head protect.",
     "2. Review the previous strategy entry and say what still carries forward.",
@@ -1682,10 +1735,12 @@ build_gpt_prompt_pack <- function(
   md_path <- file.path(output_dir, "latest_gpt_prompt_pack.md")
   txt_path <- file.path(output_dir, "latest_gpt_prompt_pack.txt")
   meta_path <- file.path(output_dir, "latest_gpt_prompt_pack_meta.json")
+  current_prices_csv_path <- file.path(output_dir, "current_player_prices_table.csv")
   pack_text <- paste(pack_lines, collapse = "\n")
 
   writeLines(pack_text, md_path, useBytes = TRUE)
   writeLines(pack_text, txt_path, useBytes = TRUE)
+  utils::write.csv(current_player_prices_csv, current_prices_csv_path, row.names = FALSE)
 
   metadata <- list(
     generated_at = format(generated_at, tz = "Australia/Sydney", usetz = TRUE),
@@ -1696,7 +1751,8 @@ build_gpt_prompt_pack <- function(
     current_matchup = opponent_label,
     files = list(
       markdown = md_path,
-      text = txt_path
+      text = txt_path,
+      current_player_prices_csv = current_prices_csv_path
     )
   )
 

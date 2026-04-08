@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-08 13:49:19 AEST",
+  "generated_at": "2026-04-08 14:05:24 AEST",
   "league_id": 21064,
   "current_round": 6,
   "next_round": 7,
@@ -7,6 +7,7 @@
   "current_matchup": "Waterboys (william)",
   "files": {
     "markdown": "data/supercoach_league_21064/analysis_export/latest_gpt_prompt_pack.md",
-    "text": "data/supercoach_league_21064/analysis_export/latest_gpt_prompt_pack.txt"
+    "text": "data/supercoach_league_21064/analysis_export/latest_gpt_prompt_pack.txt",
+    "current_player_prices_csv": "data/supercoach_league_21064/analysis_export/current_player_prices_table.csv"
   }
 }
