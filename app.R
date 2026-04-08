@@ -1152,12 +1152,19 @@ choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_,
   field_pool <- pre_assign %>%
     left_join(
       roster %>%
-        select(player_id, player, bogus_value, real_score, next_kickoff_utc),
+        select(player_id, player, bogus_value, real_score, next_kickoff_utc, risk_band, bye_this_round, active_flag),
       by = "player_id"
     ) %>%
     arrange(desc(bogus_value), desc(real_score))
 
-  candidates <- field_pool$player_id
+  safe_pool <- field_pool %>%
+    filter(
+      !bye_this_round %in% TRUE,
+      risk_band != "high" | is.na(risk_band),
+      active_flag %in% TRUE | is.na(active_flag)
+    )
+
+  candidates <- if (nrow(safe_pool) >= 2) safe_pool$player_id else field_pool$player_id
   candidates <- unique(candidates[!is.na(candidates)])
 
   safe_candidates <- setdiff(candidates, c(real_vc_id, real_c_id))
@@ -1171,6 +1178,44 @@ choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_,
   }
 
   list(vc_id = vc_id, captain_id = captain_id)
+}
+
+rebalance_planner_captaincy <- function(current_assign, roster, current_vc_id = NA_integer_, current_c_id = NA_integer_, real_vc_id = NA_integer_, real_c_id = NA_integer_) {
+  if (is.null(current_assign) || !nrow(current_assign)) {
+    return(list(vc_id = NA_integer_, captain_id = NA_integer_, actions = character()))
+  }
+
+  available_ids <- unique(current_assign$player_id)
+  vc_id <- if (!is.na(current_vc_id) && current_vc_id %in% available_ids) current_vc_id else NA_integer_
+  captain_id <- if (!is.na(current_c_id) && current_c_id %in% available_ids) current_c_id else NA_integer_
+
+  fallback_pair <- choose_bogus_captaincy(
+    pre_assign = current_assign,
+    roster = roster,
+    real_vc_id = real_vc_id,
+    real_c_id = real_c_id
+  )
+
+  if (is.na(vc_id)) {
+    vc_id <- fallback_pair$vc_id
+  }
+  if (is.na(captain_id) || identical(captain_id, vc_id)) {
+    captain_pool <- c(fallback_pair$captain_id, fallback_pair$vc_id, setdiff(available_ids, vc_id))
+    captain_pool <- captain_pool[!is.na(captain_pool)]
+    captain_pool <- unique(captain_pool)
+    captain_pool <- captain_pool[captain_pool != vc_id]
+    captain_id <- if (length(captain_pool)) captain_pool[[1]] else vc_id
+  }
+
+  actions <- character()
+  if (!identical(current_vc_id, vc_id) && !is.na(vc_id)) {
+    actions <- c(actions, paste0("Set VC to ", roster$player[match(vc_id, roster$player_id)]))
+  }
+  if (!identical(current_c_id, captain_id) && !is.na(captain_id)) {
+    actions <- c(actions, paste0("Set C to ", roster$player[match(captain_id, roster$player_id)]))
+  }
+
+  list(vc_id = vc_id, captain_id = captain_id, actions = actions)
 }
 
 apply_trades_to_assignment <- function(current_assign, future_roster, trades_complete) {
@@ -2961,6 +3006,17 @@ server <- function(input, output, session) {
     move_rows <- list()
 
     if (nrow(trades_complete)) {
+      trade_captaincy <- rebalance_planner_captaincy(
+        current_assign = post_assign,
+        roster = future_roster,
+        current_vc_id = state_vc_id,
+        current_c_id = state_captain_id,
+        real_vc_id = real_vc_id,
+        real_c_id = real_captain_id
+      )
+      state_vc_id <- trade_captaincy$vc_id
+      state_captain_id <- trade_captaincy$captain_id
+
       incoming_positions <- vapply(trades_complete$in_id, function(one_id) {
         slot_hit <- post_assign$slot[match(one_id, post_assign$player_id)]
         if (length(slot_hit) && !is.na(slot_hit)) slot_hit else "Bench"
@@ -2984,7 +3040,7 @@ server <- function(input, output, session) {
         When = format_planner_time(trade_deadline),
         `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
         Move = trade_move_text,
-        `Captaincy Change` = "No captaincy change",
+        `Captaincy Change` = if (length(trade_captaincy$actions)) paste(trade_captaincy$actions, collapse = " | ") else "No captaincy change",
         `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
         Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
         stringsAsFactors = FALSE,
