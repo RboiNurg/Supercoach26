@@ -84,6 +84,13 @@ read_required_rds <- function(path) {
   readRDS(path)
 }
 
+read_optional_rds <- function(path) {
+  if (!file.exists(path)) {
+    return(NULL)
+  }
+  readRDS(path)
+}
+
 read_optional_text <- function(path) {
   if (!file.exists(path)) {
     return(NULL)
