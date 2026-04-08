@@ -1929,6 +1929,10 @@ ui <- page_navbar(
             selectizeInput("planner_trade_in_3", "Trade in 3", choices = c("No trade" = ""), selected = "", options = list(placeholder = "No trade"))
           )
         ),
+        div(
+          class = "planner-action-row",
+          actionButton("planner_generate", "Generate Plan", class = "btn btn-primary")
+        ),
         tags$div(class = "hero-note", textOutput("planner_status_text"))
       )
     ),
@@ -2032,11 +2036,11 @@ server <- function(input, output, session) {
     })
   }
 
-  safe_table <- function(expr) {
+  safe_table <- function(expr, fallback = data.frame(Status = "Unavailable", check.names = FALSE)) {
     renderTable({
       tryCatch(
         expr,
-        error = function(e) data.frame(Status = conditionMessage(e), check.names = FALSE)
+        error = function(e) fallback
       )
     }, striped = TRUE, bordered = TRUE, spacing = "s")
   }
@@ -2359,7 +2363,7 @@ server <- function(input, output, session) {
       left_join(market_lookup, by = "in_id")
   })
 
-  planner_bundle <- reactive({
+  planner_bundle <- eventReactive(input$planner_generate, {
     current_roster <- current_planner_roster()
     future_market <- planner_market_pool()
     trades <- planner_trades()
@@ -2646,7 +2650,7 @@ server <- function(input, output, session) {
       move_schedule = bind_rows(move_rows),
       final_setup = final_setup
     )
-  })
+  }, ignoreInit = TRUE)
 
   live_ladder_round <- reactive({
     data <- dashboard_data()
@@ -3589,11 +3593,11 @@ server <- function(input, output, session) {
 
   output$planner_status_text <- safe_text({
     planner_bundle()$status_text
-  }, fallback = "Planner is waiting on a valid squad snapshot and fixture schedule.")
+  }, fallback = "Choose up to three trades, then click Generate Plan.")
 
   output$planner_start_table <- safe_table({
     planner_bundle()$starting_setup
-  })
+  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
 
   output$planner_move_table <- safe_table({
     moves <- planner_bundle()$move_schedule
@@ -3605,11 +3609,11 @@ server <- function(input, output, session) {
     } else {
       moves
     }
-  })
+  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
 
   output$planner_final_table <- safe_table({
     planner_bundle()$final_setup
-  })
+  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
 
   output$prompt_pack_status <- safe_text({
     prompt_status()
