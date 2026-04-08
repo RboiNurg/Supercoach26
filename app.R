@@ -860,6 +860,82 @@ explainer_details <- function(summary_text, ...) {
   )
 }
 
+build_field_dictionary <- function() {
+  tibble::tribble(
+    ~table_name, ~field, ~definition,
+    "League Table", "Pos", "Current head-to-head ladder position in your SuperCoach league.",
+    "League Table", "Team", "SuperCoach team name.",
+    "League Table", "Coach", "Coach display name from the league ladder feed.",
+    "League Table", "Wins", "Head-to-head wins recorded in the league ladder.",
+    "League Table", "Losses", "Head-to-head losses recorded in the league ladder.",
+    "League Table", "Prev Round Pts", "Total SuperCoach points through the last completed round snapshot.",
+    "League Table", "Current Round Pts", "Live points in the in-progress current round. This stays at 0 until games begin.",
+    "League Table", "Total Pts (Live)", "Prev Round Pts plus Current Round Pts, so you can see a live-running season total.",
+    "League Table", "Squad Value", "Current sum of rostered player prices only.",
+    "League Table", "Cash", "Current bank balance.",
+    "League Table", "Total Value", "Squad Value plus Cash.",
+    "League Table", "Changes", "Latest detected trade/change count for that team, using actual API trades where available and inferred roster deltas otherwise.",
+    "League Table", "Boosts Used", "Trade boosts used by that team so far.",
+    "Fixture Runway Breakdown", "Side", "You or your current opponent.",
+    "Fixture Runway Breakdown", "Round", "NRL round in the forward runway.",
+    "Fixture Runway Breakdown", "Club", "NRL club represented in that side's latest known squad.",
+    "Fixture Runway Breakdown", "Players From Club", "How many rostered players that side owns from the club.",
+    "Fixture Runway Breakdown", "Opponent", "Next scheduled NRL opponent for that club in the official draw.",
+    "Fixture Runway Breakdown", "Fixture Rating", "Stored next-three-round difficulty score for that club. Higher means a more favorable scoring environment in this app.",
+    "Fixture Runway Breakdown", "Weighted Contribution", "Fixture Rating multiplied by Players From Club. These contributions roll up into the runway line.",
+    "Fixture Runway Breakdown", "Short-Term Swing", "Whether the next two rounds look easier, harder, or stable relative to the broader five-round outlook.",
+    "Fixture Runway Breakdown", "Bye", "Yes if that club is on a bye in that round window.",
+    "Upcoming Fixture Market Watchlist", "player", "Player name.",
+    "Upcoming Fixture Market Watchlist", "team", "NRL club abbreviation.",
+    "Upcoming Fixture Market Watchlist", "next_opponent", "Next scheduled NRL opponent by date/time, not just a blind next round join.",
+    "Upcoming Fixture Market Watchlist", "recent_average", "Recent scoring form, primarily from the 3-round average with season average fallback.",
+    "Upcoming Fixture Market Watchlist", "matchup", "Immediate matchup rating from the fixture model. Higher means a friendlier setup.",
+    "Upcoming Fixture Market Watchlist", "category", "Top-level label driven by injury status, price cycle, form, and fixture quality.",
+    "Upcoming Fixture Market Watchlist", "price_signal", "Heuristic next-price-cycle move from recent form and price trend. Not an official breakeven.",
+    "Upcoming Fixture Market Watchlist", "swing", "Short-term schedule swing: easier_short_term, harder_short_term, or stable.",
+    "Upcoming Fixture Market Watchlist", "maturity", "Cash-cycle maturity status such as rising, flattening, or near_peak_or_peaked.",
+    "Upcoming Fixture Market Watchlist", "why", "Plain-language explanation of the strongest factors driving the category.",
+    "Market Watch Factor Breakdown", "Recent Avg", "Base form component feeding the watchlist score.",
+    "Market Watch Factor Breakdown", "Matchup Component", "Immediate fixture contribution to the overall signal score.",
+    "Market Watch Factor Breakdown", "Attack Component", "Contribution from the player's club attacking trend.",
+    "Market Watch Factor Breakdown", "Price Component", "Contribution from the current price-cycle signal.",
+    "Market Watch Factor Breakdown", "Bye Penalty", "Penalty applied if the club is on a bye.",
+    "Market Watch Factor Breakdown", "Injury Penalty", "Penalty applied when the player is flagged in the injury feed.",
+    "Market Watch Factor Breakdown", "Signal Score", "Combined watchlist score before ranking.",
+    "Your Squad Leverage Watch", "Proj 3w", "Projected next-three-week score with fallback to the latest non-missing stored projection.",
+    "Your Squad Leverage Watch", "Price Signal", "Heuristic next-price-cycle move.",
+    "Your Squad Leverage Watch", "Matchup", "Immediate matchup rating for the player's club.",
+    "Your Squad Leverage Watch", "Swing", "Short-term fixture swing label.",
+    "Your Squad Leverage Watch", "Urgency", "High/medium/normal urgency blending injuries, price cooling, byes, and matchup quality.",
+    "Your Squad Leverage Watch", "Why", "Short explanation of the dominant factor behind the row.",
+    "Cash Generation Radar", "current_price", "Current player price.",
+    "Cash Generation Radar", "category", "Cash-cycle label such as Cash cow upside, Peak risk, Cooling premium, or Injury hold.",
+    "Cash Generation Radar", "next_signal", "Expected next price-cycle move.",
+    "Cash Generation Radar", "total_cash", "Total cash generated since acquisition or starting point. Negative means value has already burned off.",
+    "Cash Generation Radar", "maturity", "Current point in the player's cash-generation cycle.",
+    "Cash Generation Radar", "why", "Short explanation of why the player landed in the category.",
+    "Availability Watch", "Risk", "Risk band from saved availability plus Zero Tackle supplementation.",
+    "Availability Watch", "Status", "Best available injury/suspension/bye status text.",
+    "Availability Watch", "Return / Note", "Expected return round or explanatory note when available.",
+    "Availability Watch", "Locked", "Whether the player is currently locked in SuperCoach.",
+    "Availability Watch", "Proj 3w", "Projected next-three-week score.",
+    "Opponent Fingerprint", "Avg Player Projection", "Average projected player score across the opponent's latest known squad. Not a whole-team projected total.",
+    "Opponent Fingerprint", "Detected Changes", "Cumulative detected trade/change count from stored trade summaries.",
+    "Opponent Fingerprint", "Latest Change Round", "Most recent round where a trade/change was detected.",
+    "Opponent Fingerprint", "Boosts Used", "Trade boosts used so far.",
+    "Trade Logs", "Source", "Actual API means confirmed from the authenticated endpoint. Inferred round delta means derived from roster changes between snapshots.",
+    "Trade Logs", "Sell Price", "Approximated at the previous round's finalised player price.",
+    "Trade Logs", "Buy Price", "Approximated at the previous round's finalised player price.",
+    "League Schedule Window", "current_score", "Live matchup score for the upcoming/current league matchup window where available.",
+    "Refresh Log", "settings_current_round", "Round reported directly by SuperCoach settings.",
+    "Refresh Log", "effective_current_round", "Round the pipeline actually uses after NRL fixture-completion logic.",
+    "Refresh Log", "round_inference_source", "Whether the current round came from settings or fixture completion inference.",
+    "Refresh Log", "mutable_rounds", "Rounds the refresh considered still likely to change.",
+    "Refresh Log", "rounds_pulled", "SuperCoach rounds refreshed in that run.",
+    "Refresh Log", "player_history_refreshed_n", "Number of player histories refreshed in that run."
+  )
+}
+
 responsive_table <- function(output_id) {
   div(class = "table-wrap", tableOutput(output_id))
 }
@@ -1282,6 +1358,22 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("League Table"),
       responsive_table("league_snapshot_table"),
+      explainer_details(
+        "League table definitions",
+        tags$p(
+          class = "section-note",
+          "This table mixes ladder results with live points and live finance. The record columns come from the official SuperCoach league ladder, while value and cash come from each team's latest known squad plus current player prices."
+        ),
+        tags$dl(
+          class = "definition-list",
+          tags$dt("Total Pts (Live)"),
+          tags$dd("Season points through the last completed round plus any live points in the current round."),
+          tags$dt("Squad Value vs Total Value"),
+          tags$dd("Squad Value is players only. Total Value is Squad Value plus Cash."),
+          tags$dt("Changes"),
+          tags$dd("Detected roster changes/trades from the stored league trade summary, not just your own team.")
+        )
+      ),
       card_footer(class = "section-note", "Prev Round Pts comes from the last complete league-finance snapshot. Current Round Pts is the live round score feed, which will stay at 0 until games start.")
     ),
     card(
@@ -1311,6 +1403,25 @@ ui <- page_navbar(
       full_screen = TRUE,
       card_header("League-Wide Trade Log"),
       responsive_table("league_trade_table")
+    )
+  ),
+  nav_panel(
+    "Dictionary",
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Field Dictionary"),
+      div(
+        class = "card-body",
+        selectInput(
+          "dictionary_table_filter",
+          "Table",
+          choices = c("All tables", sort(unique(build_field_dictionary()$table_name))),
+          selected = "All tables"
+        )
+      ),
+      responsive_table("field_dictionary_table"),
+      card_footer(class = "section-note", "This is the app-side field dictionary for displayed tables and breakdown tables. Plot cards are documented in their expandable explainers.")
     )
   ),
   nav_panel(
@@ -2368,10 +2479,14 @@ server <- function(input, output, session) {
         Pos = position,
         Team = team_name,
         Coach = coach_name,
+        Wins = wins,
+        Losses = losses,
         `Prev Round Pts` = round_points,
         `Current Round Pts` = coalesce(current_round_points, 0),
-        `Squad Value` = dollar(team_value_total_calc),
+        `Total Pts (Live)` = coalesce(total_points, round_points, 0) + coalesce(current_round_points, 0),
+        `Squad Value` = dollar(squad_value_calc),
         Cash = dollar(cash_end_round_calc),
+        `Total Value` = dollar(team_value_total_calc),
         `Changes` = coalesce(total_changes, cumulative_detected_changes, 0L),
         `Boosts Used` = trade_boosts_used
       )
@@ -2417,6 +2532,21 @@ server <- function(input, output, session) {
         Notes = notes
       ) %>%
       slice_head(n = 12)
+  })
+
+  output$field_dictionary_table <- safe_table({
+    dictionary <- build_field_dictionary()
+    filter_value <- input$dictionary_table_filter %||% "All tables"
+    if (!identical(filter_value, "All tables")) {
+      dictionary <- dictionary %>% filter(table_name == filter_value)
+    }
+    dictionary %>%
+      arrange(table_name, field) %>%
+      transmute(
+        Table = table_name,
+        Field = field,
+        Definition = definition
+      )
   })
 
   output$matchup_trade_table <- safe_table({
