@@ -1173,6 +1173,63 @@ choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_,
   list(vc_id = vc_id, captain_id = captain_id)
 }
 
+apply_trades_to_assignment <- function(current_assign, future_roster, trades_complete) {
+  if (is.null(current_assign) || !nrow(current_assign) || is.null(trades_complete) || !nrow(trades_complete)) {
+    return(current_assign)
+  }
+
+  updated <- current_assign
+
+  for (i in seq_len(nrow(trades_complete))) {
+    out_id <- trades_complete$out_id[[i]]
+    in_id <- trades_complete$in_id[[i]]
+    out_idx <- match(out_id, updated$player_id)
+
+    if (is.na(out_idx) || is.na(in_id)) {
+      next
+    }
+
+    incoming_row <- future_roster %>%
+      filter(player_id == in_id) %>%
+      slice_head(n = 1)
+
+    if (!nrow(incoming_row)) {
+      next
+    }
+
+    target_slot <- updated$slot[[out_idx]]
+    slot_base <- slot_base_from_slot_name(target_slot)
+    incoming_eligibility <- incoming_row$eligibility[[1]]
+
+    if (planner_slot_eligible(incoming_eligibility, slot_base)) {
+      updated$player_id[[out_idx]] <- in_id
+      updated$player[[out_idx]] <- incoming_row$player[[1]]
+    }
+  }
+
+  updated
+}
+
+apply_trades_to_reserves <- function(current_reserves, trades_complete) {
+  updated <- current_reserves %||% integer()
+  if (!length(updated) || is.null(trades_complete) || !nrow(trades_complete)) {
+    return(updated)
+  }
+
+  for (i in seq_len(nrow(trades_complete))) {
+    out_id <- trades_complete$out_id[[i]]
+    in_id <- trades_complete$in_id[[i]]
+    if (is.na(out_id) || is.na(in_id)) {
+      next
+    }
+    if (out_id %in% updated) {
+      updated[updated == out_id] <- in_id
+    }
+  }
+
+  unique(updated)
+}
+
 align_assignment_to_current_slots <- function(current_assign, candidate_assign) {
   if (is.null(current_assign) || !nrow(current_assign) || is.null(candidate_assign) || !nrow(candidate_assign)) {
     return(candidate_assign)
@@ -1247,33 +1304,74 @@ align_assignment_to_current_slots <- function(current_assign, candidate_assign) 
 }
 
 planner_lock_step_assignment <- function(players, slots, current_assign, current_kickoff, required_ids = integer(), target_ids = integer()) {
-  if (is.null(players) || !nrow(players)) {
-    return(NULL)
+  if (is.null(players) || !nrow(players) || is.null(current_assign) || !nrow(current_assign)) {
+    return(current_assign)
   }
 
-  current_field_ids <- current_assign$player_id %||% integer()
-  locking_ids <- players %>%
-    filter(!is.na(next_kickoff_utc), next_kickoff_utc == current_kickoff) %>%
-    pull(player_id)
-  locking_target_ids <- intersect(locking_ids, target_ids)
-  locking_non_target_ids <- setdiff(locking_ids, target_ids)
+  roster_lookup <- players %>%
+    select(player_id, player, next_kickoff_utc, real_score, bogus_value, eligibility)
 
-  players %>%
-    mutate(
-      step_value = bogus_value / 10 +
-        if_else(player_id %in% current_field_ids, 50000, -50000) +
-        if_else(player_id %in% locking_target_ids, 250000, 0) +
-        if_else(player_id %in% locking_non_target_ids, -250000, 0) +
-        if_else(player_id %in% required_ids, 1e6, 0),
-      step_value = if_else(
-        !is.na(next_kickoff_utc) & !is.na(current_kickoff) & next_kickoff_utc <= current_kickoff & !player_id %in% required_ids,
-        step_value - 1e6,
-        step_value
-      ) +
-      if_else(player_id %in% current_field_ids, real_score / 10, 0)
-    ) %>%
-    solve_best_lineup(slots, "step_value") %>%
-    align_assignment_to_current_slots(current_assign)
+  updated <- current_assign
+  missing_required <- setdiff(required_ids, updated$player_id)
+
+  if (!length(missing_required)) {
+    return(updated)
+  }
+
+  for (required_id in missing_required) {
+    incoming_row <- roster_lookup %>%
+      filter(player_id == required_id) %>%
+      slice_head(n = 1)
+
+    if (!nrow(incoming_row)) {
+      next
+    }
+
+    candidate_slots <- updated %>%
+      mutate(
+        slot_base = vapply(slot, slot_base_from_slot_name, character(1))
+      ) %>%
+      filter(vapply(slot_base, function(one_slot) {
+        planner_slot_eligible(incoming_row$eligibility[[1]], one_slot)
+      }, logical(1))) %>%
+      left_join(
+        roster_lookup %>%
+          rename(
+            current_player_id = player_id,
+            current_player = player,
+            current_kickoff_utc = next_kickoff_utc,
+            current_real_score = real_score,
+            current_bogus_value = bogus_value
+          ),
+        by = c("player_id" = "current_player_id")
+      ) %>%
+      mutate(
+        current_is_required = player_id %in% required_ids,
+        current_is_target = player_id %in% target_ids,
+        current_locked = !is.na(current_kickoff_utc) & !is.na(current_kickoff) & current_kickoff_utc <= current_kickoff,
+        replacement_priority = case_when(
+          current_is_required ~ -1e9,
+          !current_is_target & !current_locked ~ 6000,
+          !current_is_target & current_locked ~ 3000,
+          current_is_target & !current_locked ~ -2000,
+          TRUE ~ -5000
+        ) +
+          coalesce(current_bogus_value, 0) / 10 -
+          coalesce(current_real_score, 0) / 20
+      ) %>%
+      arrange(desc(replacement_priority), slot)
+
+    if (!nrow(candidate_slots)) {
+      next
+    }
+
+    chosen_slot <- candidate_slots$slot[[1]]
+    slot_idx <- match(chosen_slot, updated$slot)
+    updated$player_id[[slot_idx]] <- incoming_row$player_id[[1]]
+    updated$player[[slot_idx]] <- incoming_row$player[[1]]
+  }
+
+  updated
 }
 
 format_planner_time <- function(x, fallback = "Before first relevant lock") {
@@ -2199,15 +2297,6 @@ ui <- page_navbar(
           class = "section-note",
           "Pick up to three trades. The planner will build a score-maximising final team, a low-reveal bogus team to start the round, and the exact moves needed to let the real side fall into place under rolling lockout."
         ),
-        tags$h4("Suggested Captain / VC Combos", class = "planner-subheading"),
-        responsive_table("planner_cvc_table"),
-        selectizeInput(
-          "planner_cvc_choice",
-          "Use recommended combo",
-          choices = c("Auto-select top combo" = ""),
-          selected = "",
-          options = list(placeholder = "Auto-select top combo")
-        ),
         fluidRow(
           column(
             width = 6,
@@ -2240,7 +2329,19 @@ ui <- page_navbar(
         ),
         div(
           class = "planner-action-row",
+          actionButton("planner_confirm_trades", "Confirm Trades", class = "btn btn-secondary"),
+          tags$span(" ", class = "planner-spacer"),
           actionButton("planner_generate", "Generate Plan", class = "btn btn-primary")
+        ),
+        tags$div(class = "hero-note", textOutput("planner_trade_status_text")),
+        tags$h4("Suggested Captain / VC Combos", class = "planner-subheading"),
+        responsive_table("planner_cvc_table"),
+        selectizeInput(
+          "planner_cvc_choice",
+          "Use recommended combo",
+          choices = c("Auto-select top combo" = ""),
+          selected = "",
+          options = list(placeholder = "Confirm trades to load captain / VC combos")
         ),
         tags$div(class = "hero-note", textOutput("planner_status_text"))
       )
@@ -2715,8 +2816,12 @@ server <- function(input, output, session) {
     )
   })
 
+  planner_trade_bundle <- eventReactive(input$planner_confirm_trades, {
+    planner_future_bundle()
+  }, ignoreInit = TRUE)
+
   planner_cvc_recommendations <- reactive({
-    bundle <- planner_future_bundle()
+    bundle <- planner_trade_bundle()
     recommend_planner_cvc_combos(bundle$future_roster, n = 5L)
   })
 
@@ -2740,7 +2845,7 @@ server <- function(input, output, session) {
   })
 
   planner_bundle <- eventReactive(input$planner_generate, {
-    planner_seed <- planner_future_bundle()
+    planner_seed <- planner_trade_bundle()
     current_roster <- planner_seed$current_roster
     future_market <- planner_seed$future_market
     trades <- planner_seed$trades
@@ -2799,11 +2904,12 @@ server <- function(input, output, session) {
           real_score / 8
       )
 
-    post_assign <- if (nrow(trades)) solve_best_lineup(future_roster, slots, "bogus_value") else pre_assign
+    post_assign <- if (nrow(trades_complete)) apply_trades_to_assignment(pre_assign, future_roster, trades_complete) else pre_assign
     req(!is.null(post_assign), nrow(post_assign) > 0)
 
     pre_reserves <- choose_planner_reserves(current_roster, pre_assign$player_id, current_target_ids)
-    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids, current_reserves = pre_reserves)
+    post_reserve_seed <- apply_trades_to_reserves(pre_reserves, trades_complete)
+    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids, current_reserves = post_reserve_seed)
 
     cvc_recs <- planner_cvc_recommendations()
     selected_combo <- as.character(input$planner_cvc_choice %||% "")
@@ -2861,18 +2967,11 @@ server <- function(input, output, session) {
       }, character(1))
 
       trade_text <- paste(
-        paste0(
-          "Trade ",
-          trades_complete$out_player,
-          " -> ",
-          trades_complete$in_player,
-          " and park ",
-          trades_complete$in_player,
-          " at ",
-          incoming_positions
-        ),
+        paste0("Trade ", trades_complete$out_player, " -> ", trades_complete$in_player, " into ", incoming_positions),
         collapse = " | "
       )
+      trade_lineup_text <- describe_slot_changes(pre_assign, post_assign, player_lookup)
+      trade_move_text <- paste(c(trade_text, trade_lineup_text[trade_lineup_text != "No lineup change"]), collapse = " | ")
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
@@ -2884,7 +2983,7 @@ server <- function(input, output, session) {
         ) else "Trade window",
         When = format_planner_time(trade_deadline),
         `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
-        Move = trade_text,
+        Move = trade_move_text,
         `Captaincy Change` = "No captaincy change",
         `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
         Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
@@ -3042,7 +3141,7 @@ server <- function(input, output, session) {
         )
     )
 
-    final_setup <- final_assign %>%
+    final_active_setup <- final_assign %>%
       left_join(
         future_roster %>%
           select(player_id, team_abbrev, next_opponent, next_kickoff_utc, real_score, risk_band, bye_this_round, recent_average, matchup_rating),
@@ -3070,8 +3169,34 @@ server <- function(input, output, session) {
         )
       )
 
+    final_reserve_ids <- choose_planner_reserves(
+      future_roster,
+      final_assign$player_id,
+      final_ids,
+      current_reserves = state_reserves
+    )
+
+    final_reserve_setup <- future_roster %>%
+      filter(player_id %in% final_reserve_ids, !player_id %in% final_assign$player_id) %>%
+      transmute(
+        Slot = "Reserve",
+        Player = player,
+        Team = team_abbrev,
+        Captaincy = "",
+        `Next Opp` = next_opponent,
+        `Kickoff (AEST)` = format_planner_time(next_kickoff_utc, fallback = "Bye / no kickoff"),
+        `Real Score` = round(real_score, 1),
+        Why = case_when(
+          risk_band == "high" ~ "reserve scorer carried despite risk because the projected upside still beats other bench options",
+          bye_this_round %in% TRUE ~ "reserve scorer kept for structure only; bye reduces practical value",
+          TRUE ~ "reserve scorer kept in the final four for counting-point upside and flexibility"
+        )
+      )
+
+    final_setup <- bind_rows(final_active_setup, final_reserve_setup)
+
     status_lines <- c(
-      paste0("Real team is optimised for ", nrow(final_setup), " active scorers plus 4 rotating reserves."),
+      paste0("Real team is optimised for 14 on-field scorers plus ", nrow(final_reserve_setup), " reserve scorers."),
       if (nrow(trades_complete)) paste0("Selected trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | ")) else "Selected trades: no trade.",
       if (!is.na(real_vc_id) || !is.na(real_captain_id)) {
         paste0(
@@ -4071,14 +4196,30 @@ server <- function(input, output, session) {
       slice_head(n = 60)
   })
 
+  output$planner_trade_status_text <- safe_text({
+    bundle <- planner_trade_bundle()
+    trades_complete <- bundle$trades_complete
+    notes <- bundle$notes
+    summary <- if (nrow(trades_complete)) {
+      paste0("Confirmed trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | "))
+    } else {
+      "Confirmed trades: no trade."
+    }
+    if (length(notes)) {
+      paste(c(summary, paste(notes, collapse = " | ")), collapse = " ")
+    } else {
+      summary
+    }
+  }, fallback = "Choose up to three trades, then click Confirm Trades.")
+
   output$planner_status_text <- safe_text({
     planner_bundle()$status_text
-  }, fallback = "Choose up to three trades, then click Generate Plan.")
+  }, fallback = "After confirming trades and choosing a VC/C combo, click Generate Plan.")
 
   output$planner_cvc_table <- safe_table({
     recs <- planner_cvc_recommendations()
     if (is.null(recs) || !nrow(recs)) {
-      data.frame(Status = "No captain / VC recommendations available for the current trade setup.", check.names = FALSE)
+      data.frame(Status = "No captain / VC recommendations available for the confirmed trade setup.", check.names = FALSE)
     } else {
       recs %>%
         transmute(
@@ -4092,11 +4233,11 @@ server <- function(input, output, session) {
           Why = `Why This Combo`
         )
     }
-  }, fallback = data.frame(Status = "Choose your trade setup to load captain / VC recommendations.", check.names = FALSE))
+  }, fallback = data.frame(Status = "Choose your trade setup and click Confirm Trades to load captain / VC recommendations.", check.names = FALSE))
 
   output$planner_start_table <- safe_table({
     planner_bundle()$starting_setup
-  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
+  }, fallback = data.frame(Status = "Confirm trades, pick a VC/C combo, then click Generate Plan.", check.names = FALSE))
 
   output$planner_move_table <- safe_table({
     moves <- planner_bundle()$move_schedule
@@ -4108,11 +4249,11 @@ server <- function(input, output, session) {
     } else {
       moves
     }
-  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
+  }, fallback = data.frame(Status = "Confirm trades, pick a VC/C combo, then click Generate Plan.", check.names = FALSE))
 
   output$planner_final_table <- safe_table({
     planner_bundle()$final_setup
-  }, fallback = data.frame(Status = "Choose your trade scenario and click Generate Plan.", check.names = FALSE))
+  }, fallback = data.frame(Status = "Confirm trades, pick a VC/C combo, then click Generate Plan.", check.names = FALSE))
 
   output$prompt_pack_status <- safe_text({
     prompt_status()
