@@ -1026,7 +1026,7 @@ solve_best_lineup <- function(players, slots, value_col) {
     )
 }
 
-choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 4L) {
+choose_planner_reserves <- function(players, field_ids, final_ids, current_reserves = integer(), n_reserves = 4L) {
   if (is.null(players) || !nrow(players)) {
     return(integer())
   }
@@ -1034,6 +1034,7 @@ choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 
   bench <- players %>%
     filter(!player_id %in% field_ids) %>%
     mutate(
+      carried_reserve = player_id %in% (current_reserves %||% integer()),
       final_target = player_id %in% final_ids,
       kickoff_rank = if_else(
         is.na(next_kickoff_utc),
@@ -1041,7 +1042,7 @@ choose_planner_reserves <- function(players, field_ids, final_ids, n_reserves = 
         as.numeric(as.POSIXct(next_kickoff_utc, tz = "UTC"))
       )
     ) %>%
-    arrange(desc(final_target), kickoff_rank, desc(real_score), desc(bogus_value))
+    arrange(desc(carried_reserve), desc(final_target), kickoff_rank, desc(real_score), desc(bogus_value))
 
   head(bench$player_id, n_reserves)
 }
@@ -1172,27 +1173,107 @@ choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_,
   list(vc_id = vc_id, captain_id = captain_id)
 }
 
-planner_lock_step_assignment <- function(players, slots, current_kickoff, required_ids = integer()) {
+align_assignment_to_current_slots <- function(current_assign, candidate_assign) {
+  if (is.null(current_assign) || !nrow(current_assign) || is.null(candidate_assign) || !nrow(candidate_assign)) {
+    return(candidate_assign)
+  }
+
+  aligned <- candidate_assign
+  slot_groups <- list(
+    FRF = grep("^FRF", aligned$slot, value = TRUE),
+    `2RF` = grep("^2RF", aligned$slot, value = TRUE),
+    CTW = grep("^CTW", aligned$slot, value = TRUE)
+  )
+
+  for (group_slots in slot_groups) {
+    if (length(group_slots) < 2) {
+      next
+    }
+
+    current_group <- current_assign %>%
+      filter(slot %in% group_slots) %>%
+      arrange(match(slot, group_slots))
+    candidate_group <- aligned %>%
+      filter(slot %in% group_slots) %>%
+      arrange(match(slot, group_slots))
+
+    shared_ids <- intersect(current_group$player_id, candidate_group$player_id)
+    rebuilt <- vector("list", length(group_slots))
+    names(rebuilt) <- group_slots
+    used_ids <- integer()
+
+    for (i in seq_len(nrow(current_group))) {
+      current_player_id <- current_group$player_id[[i]]
+      current_slot <- current_group$slot[[i]]
+
+      if (current_player_id %in% shared_ids) {
+        row_tbl <- candidate_group %>%
+          filter(player_id == current_player_id) %>%
+          slice_head(n = 1)
+        if (nrow(row_tbl)) {
+          row_tbl$slot <- current_slot
+          rebuilt[[current_slot]] <- row_tbl
+          used_ids <- c(used_ids, current_player_id)
+        }
+      }
+    }
+
+    remaining_slots <- names(rebuilt)[vapply(rebuilt, is.null, logical(1))]
+    remaining_rows <- candidate_group %>%
+      filter(!player_id %in% used_ids) %>%
+      arrange(match(slot, group_slots))
+
+    if (length(remaining_slots) && nrow(remaining_rows)) {
+      for (i in seq_along(remaining_slots)) {
+        if (i > nrow(remaining_rows)) {
+          break
+        }
+        row_tbl <- remaining_rows[i, , drop = FALSE]
+        row_tbl$slot <- remaining_slots[[i]]
+        rebuilt[[remaining_slots[[i]]]] <- row_tbl
+      }
+    }
+
+    rebuilt_tbl <- dplyr::bind_rows(rebuilt)
+    if (nrow(rebuilt_tbl) == length(group_slots)) {
+      aligned <- aligned %>%
+        filter(!slot %in% group_slots) %>%
+        bind_rows(rebuilt_tbl) %>%
+        arrange(match(slot, candidate_assign$slot))
+    }
+  }
+
+  aligned
+}
+
+planner_lock_step_assignment <- function(players, slots, current_assign, current_kickoff, required_ids = integer(), target_ids = integer()) {
   if (is.null(players) || !nrow(players)) {
     return(NULL)
   }
 
+  current_field_ids <- current_assign$player_id %||% integer()
+  locking_ids <- players %>%
+    filter(!is.na(next_kickoff_utc), next_kickoff_utc == current_kickoff) %>%
+    pull(player_id)
+  locking_target_ids <- intersect(locking_ids, target_ids)
+  locking_non_target_ids <- setdiff(locking_ids, target_ids)
+
   players %>%
     mutate(
-      step_value = bogus_value +
+      step_value = bogus_value / 10 +
+        if_else(player_id %in% current_field_ids, 50000, -50000) +
+        if_else(player_id %in% locking_target_ids, 250000, 0) +
+        if_else(player_id %in% locking_non_target_ids, -250000, 0) +
         if_else(player_id %in% required_ids, 1e6, 0),
-      step_value = if_else(
-        !is.na(next_kickoff_utc) & player_id %in% required_ids,
-        step_value + real_score,
-        step_value
-      ),
       step_value = if_else(
         !is.na(next_kickoff_utc) & !is.na(current_kickoff) & next_kickoff_utc <= current_kickoff & !player_id %in% required_ids,
         step_value - 1e6,
         step_value
-      )
+      ) +
+      if_else(player_id %in% current_field_ids, real_score / 10, 0)
     ) %>%
-    solve_best_lineup(slots, "step_value")
+    solve_best_lineup(slots, "step_value") %>%
+    align_assignment_to_current_slots(current_assign)
 }
 
 format_planner_time <- function(x, fallback = "Before first relevant lock") {
@@ -2722,7 +2803,7 @@ server <- function(input, output, session) {
     req(!is.null(post_assign), nrow(post_assign) > 0)
 
     pre_reserves <- choose_planner_reserves(current_roster, pre_assign$player_id, current_target_ids)
-    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids)
+    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids, current_reserves = pre_reserves)
 
     cvc_recs <- planner_cvc_recommendations()
     selected_combo <- as.character(input$planner_cvc_choice %||% "")
@@ -2835,8 +2916,10 @@ server <- function(input, output, session) {
       batch_assign <- planner_lock_step_assignment(
         players = state_roster,
         slots = slots,
+        current_assign = state_assign,
         current_kickoff = kickoff_value,
-        required_ids = required_ids
+        required_ids = required_ids,
+        target_ids = final_ids
       )
 
       if (is.null(batch_assign) || !nrow(batch_assign)) {
@@ -2859,7 +2942,12 @@ server <- function(input, output, session) {
 
       move_text <- describe_slot_changes(state_assign, batch_assign, player_lookup)
       carried_reserves <- carry_reserves_from_swaps(state_reserves, bench_pairs, batch_assign$player_id)
-      next_reserves <- choose_planner_reserves(state_roster, batch_assign$player_id, final_ids)
+      next_reserves <- choose_planner_reserves(
+        state_roster,
+        batch_assign$player_id,
+        final_ids,
+        current_reserves = carried_reserves
+      )
       captaincy_actions <- character()
 
       if (!is.na(real_vc_id) && real_vc_id %in% group_tbl$player_id && !identical(state_vc_id, real_vc_id)) {
