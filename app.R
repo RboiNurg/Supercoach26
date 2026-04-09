@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-captain-transfer-20260409e"
+planner_logic_build <- "planner-score-smoothing-20260409f"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -2657,6 +2657,24 @@ prepare_planner_roster <- function(
       recent_average = coalesce(recent_average_adjusted, average_3_round, projected_score_this_week_lookup, current_season_average, 0),
       form_baseline = coalesce(recent_form_baseline_adjusted, average_5_round, current_season_average, recent_average, 0),
       season_anchor = coalesce(current_season_average, form_baseline, recent_average, 0),
+      projection_signal = case_when(
+        is.na(projected_score_this_week_lookup) ~ coalesce(recent_average, form_baseline, season_anchor, 0),
+        coalesce(games_played, 0) >= 5 ~
+          projected_score_this_week_lookup * 0.45 +
+          recent_average * 0.20 +
+          form_baseline * 0.20 +
+          season_anchor * 0.15,
+        coalesce(games_played, 0) >= 3 ~
+          projected_score_this_week_lookup * 0.55 +
+          recent_average * 0.20 +
+          form_baseline * 0.15 +
+          season_anchor * 0.10,
+        TRUE ~
+          projected_score_this_week_lookup * 0.70 +
+          recent_average * 0.15 +
+          form_baseline * 0.10 +
+          season_anchor * 0.05
+      ),
       minutes_average = coalesce(minutes_average_3, minutes_average_5, 0),
       minutes_floor = coalesce(minutes_average_5, minutes_average_3, 0),
       form_delta = coalesce(recent_average_adjusted, average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
@@ -2700,6 +2718,16 @@ prepare_planner_roster <- function(
         TRUE ~ pmax(minutes_average - 60, 0) * 0.06
       ),
       class_bonus = pmax(season_anchor - 55, 0) * 0.30 + pmax(form_baseline - 60, 0) * 0.12,
+      stability_bonus = case_when(
+        coalesce(games_played, 0) >= 5 & season_anchor >= 60 & recent_average >= 55 ~ 4,
+        coalesce(games_played, 0) >= 4 & season_anchor >= 58 & recent_average >= 52 ~ 2.5,
+        TRUE ~ 0
+      ) +
+        if_else(
+          coalesce(games_played, 0) >= 4,
+          pmax(form_baseline - coalesce(projected_score_this_week_lookup, form_baseline), 0) * 0.05,
+          0
+        ),
       goal_bonus = if_else(grepl("goal|kicker|primary", tolower(coalesce(goal_kicking_status, ""))), 4, 0),
       starting_bonus = if_else(grepl("start", tolower(coalesce(starting_status, ""))), 3, 0),
       risk_penalty = case_when(
@@ -2710,7 +2738,7 @@ prepare_planner_roster <- function(
       inactive_penalty = if_else(active_flag %in% FALSE, 18, 0),
       bye_penalty = if_else(bye_this_round, 12, 0),
       locked_now = !is.na(next_kickoff_utc) & as.POSIXct(now, tz = "UTC") >= next_kickoff_utc,
-      real_score = coalesce(projected_score_this_week, recent_average, 0) * 0.26 +
+      real_score = projection_signal * 0.26 +
         recent_average * 0.28 +
         coalesce(form_baseline, 0) * 0.24 +
         season_anchor * 0.18 +
@@ -2719,6 +2747,7 @@ prepare_planner_roster <- function(
         position_environment_bonus +
         minutes_bonus +
         class_bonus +
+        stability_bonus +
         home_bonus +
         rest_bonus -
         travel_penalty +
