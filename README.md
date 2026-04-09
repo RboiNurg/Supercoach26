@@ -83,6 +83,35 @@ This repo is intended to work well with Codex and GitHub-based iteration.
 
 ChatGPT can be connected to GitHub through **Settings → Apps → GitHub**, where repository access is authorised. OpenAI’s Codex admin setup documentation also notes that Codex cloud currently works with GitHub cloud-hosted repositories. :contentReference[oaicite:0]{index=0}
 
+## Development workflow
+
+This repo now includes repo-specific operating guidance for agentic coding work:
+
+- [AGENTS.md](AGENTS.md)
+- [docs/development-workflow.md](docs/development-workflow.md)
+- [docs/ops-setup.md](docs/ops-setup.md)
+
+### Minimum verification before republish
+
+```bash
+Rscript -e 'invisible(parse(file="app.R")); cat("parse ok\n")'
+Rscript scripts/smoke_check_app.R
+```
+
+### Current coding reality
+
+- The app currently lives mainly in `app.R`
+- data refresh and export logic live in `scripts/`
+- bundled league data lives in `data/supercoach_league_21064/`
+
+For now, the safest way to work is:
+
+1. keep tasks tightly scoped
+2. inspect relevant code first
+3. make the smallest change that fits the existing pattern
+4. run the verification commands above
+5. republish from `main`
+
 ## Design principles
 
 - role over hype
