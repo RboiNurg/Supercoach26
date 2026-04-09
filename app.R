@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-role-sense-20260409g"
+planner_logic_build <- "planner-board-state-20260409h"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -1425,6 +1425,98 @@ choose_planner_reserves <- function(
   unique(c(locked_on_ids, picked_ids))
 }
 
+plan_window_reserves <- function(
+  players,
+  bench_ids,
+  current_reserves,
+  goal_reserves,
+  kickoff_value,
+  n_reserves = 4L,
+  locked_on_ids = integer(),
+  locked_off_ids = integer()
+) {
+  bench_ids <- bench_ids %||% integer()
+  current_reserves <- intersect(current_reserves %||% integer(), bench_ids)
+  goal_reserves <- intersect(goal_reserves %||% integer(), bench_ids)
+  locked_on_ids <- intersect(locked_on_ids %||% integer(), bench_ids)
+  locked_off_ids <- intersect(locked_off_ids %||% integer(), bench_ids)
+
+  if (!length(bench_ids)) {
+    return(integer())
+  }
+
+  bench_tbl <- players %>%
+    filter(player_id %in% bench_ids) %>%
+    mutate(
+      bench_rank = match(player_id, bench_ids),
+      locking_now = !is.na(next_kickoff_utc) & !is.na(kickoff_value) & next_kickoff_utc == kickoff_value,
+      reserve_goal = player_id %in% goal_reserves,
+      carried_reserve = player_id %in% current_reserves
+    ) %>%
+    arrange(bench_rank)
+
+  next_reserves <- union(locked_on_ids, setdiff(current_reserves, locked_off_ids))
+
+  # If a currently reserved bench player is about to lock without being part of the
+  # reserve goal, switch that marker away before kickoff.
+  drop_now <- bench_tbl %>%
+    filter(locking_now %in% TRUE, player_id %in% next_reserves, !reserve_goal) %>%
+    pull(player_id)
+  next_reserves <- setdiff(next_reserves, drop_now)
+
+  # If a goal reserve is about to lock, make sure the marker is on before kickoff.
+  add_now <- bench_tbl %>%
+    filter(locking_now %in% TRUE, reserve_goal %in% TRUE, !player_id %in% next_reserves, !player_id %in% locked_off_ids) %>%
+    arrange(desc(real_score), bench_rank) %>%
+    pull(player_id)
+  next_reserves <- unique(c(next_reserves, add_now))
+
+  # Trim any overflow, but never trim markers that are already locked on.
+  if (length(next_reserves) > n_reserves) {
+    overflow_candidates <- setdiff(next_reserves, locked_on_ids)
+    overflow_rank <- bench_tbl %>%
+      filter(player_id %in% overflow_candidates) %>%
+      mutate(
+        trim_priority = dplyr::case_when(
+          reserve_goal %in% TRUE ~ 4,
+          locking_now %in% TRUE ~ 3,
+          carried_reserve %in% TRUE ~ 2,
+          TRUE ~ 1
+        )
+      ) %>%
+      arrange(trim_priority, real_score, bench_rank) %>%
+      pull(player_id)
+    next_reserves <- setdiff(next_reserves, head(overflow_rank, length(next_reserves) - n_reserves))
+  }
+
+  # Fill any remaining gaps with the best-scoring goal reserves first, while still
+  # preferring the current carried markers where possible.
+  if (length(next_reserves) < n_reserves) {
+    fill_candidates <- bench_tbl %>%
+      filter(!player_id %in% next_reserves, !player_id %in% locked_off_ids) %>%
+      mutate(
+        fill_priority = dplyr::case_when(
+          reserve_goal %in% TRUE & locking_now %in% TRUE ~ 5,
+          reserve_goal %in% TRUE ~ 4,
+          carried_reserve %in% TRUE ~ 3,
+          locking_now %in% TRUE ~ 2,
+          TRUE ~ 1
+        )
+      ) %>%
+      arrange(desc(fill_priority), desc(real_score), bench_rank) %>%
+      pull(player_id)
+    next_reserves <- unique(c(next_reserves, head(fill_candidates, n_reserves - length(next_reserves))))
+  }
+
+  next_reserves <- intersect(next_reserves, bench_ids)
+
+  # Keep output in bench order so the transition text is stable and readable.
+  bench_tbl %>%
+    filter(player_id %in% next_reserves) %>%
+    arrange(bench_rank) %>%
+    pull(player_id)
+}
+
 order_planner_bench_ids <- function(players, field_ids, reserve_ids = integer(), current_bench_ids = integer()) {
   if (is.null(players) || !nrow(players)) {
     return(integer())
@@ -2231,13 +2323,6 @@ describe_planner_state_changes <- function(from_assign, from_bench_ids, to_assig
       paste0(slot_name, ": ", lookup_name(current_id), " -> ", lookup_name(desired_id))
     )
     current_field[[slot_name]] <- desired_id
-  }
-
-  final_target_bench <- to_bench_ids %||% integer()
-  if (length(final_target_bench)) {
-    stable_bench <- current_bench[current_bench %in% final_target_bench]
-    incoming_bench <- final_target_bench[!final_target_bench %in% stable_bench]
-    current_bench <- c(stable_bench, incoming_bench)
   }
 
   if (!length(steps)) {
@@ -4183,12 +4268,18 @@ server <- function(input, output, session) {
     )
     post_reserve_seed <- apply_trades_to_reserves(pre_reserves, trades_complete)
     post_bench_seed <- apply_trades_to_bench_ids(pre_bench_ids, trades_complete)
-    post_reserves <- choose_planner_reserves(future_roster, post_assign$player_id, final_ids, current_reserves = post_reserve_seed)
-    post_bench_ids <- order_planner_bench_ids(
+    post_bench_ids <- post_bench_seed
+    post_reserves <- plan_window_reserves(
       players = future_roster,
-      field_ids = post_assign$player_id,
-      reserve_ids = post_reserves,
-      current_bench_ids = post_bench_seed
+      bench_ids = post_bench_ids,
+      current_reserves = post_reserve_seed,
+      goal_reserves = choose_planner_reserves(
+        future_roster,
+        post_assign$player_id,
+        final_ids,
+        current_reserves = post_reserve_seed
+      ),
+      kickoff_value = if (!is.na(trade_deadline)) trade_deadline + 10 * 60 else as.POSIXct(NA, tz = "UTC")
     )
 
     cvc_recs <- planner_cvc_recommendations()
@@ -4321,7 +4412,7 @@ server <- function(input, output, session) {
     }
 
     lock_windows <- future_roster %>%
-      filter(!is.na(next_kickoff_utc)) %>%
+      filter(!is.na(next_kickoff_utc), !bye_this_round %in% TRUE) %>%
       arrange(next_kickoff_utc, desc(real_score), player)
 
     final_plan_groups <- split(lock_windows, as.character(lock_windows$next_kickoff_utc))
@@ -4383,12 +4474,7 @@ server <- function(input, output, session) {
         next
       }
 
-      target_bench_ids <- order_planner_bench_ids(
-        players = state_roster,
-        field_ids = batch_assign$player_id,
-        reserve_ids = state_reserves,
-        current_bench_ids = forced_state$bench_ids
-      )
+      target_bench_ids <- forced_state$bench_ids
       move_state <- describe_planner_state_changes(
         from_assign = state_assign,
         from_bench_ids = state_bench_ids,
@@ -4405,11 +4491,20 @@ server <- function(input, output, session) {
         current_reserves = carried_reserves,
         before_kickoff_utc = kickoff_value
       )
-      next_reserves <- choose_planner_reserves(
+      goal_reserves <- choose_planner_reserves(
         state_roster,
         batch_assign$player_id,
         final_ids,
         current_reserves = carried_reserves,
+        locked_on_ids = locked_state_after_moves$locked_reserve_on_ids,
+        locked_off_ids = locked_state_after_moves$locked_reserve_off_ids
+      )
+      next_reserves <- plan_window_reserves(
+        players = state_roster,
+        bench_ids = move_state$bench_ids,
+        current_reserves = carried_reserves,
+        goal_reserves = goal_reserves,
+        kickoff_value = kickoff_value,
         locked_on_ids = locked_state_after_moves$locked_reserve_on_ids,
         locked_off_ids = locked_state_after_moves$locked_reserve_off_ids
       )
