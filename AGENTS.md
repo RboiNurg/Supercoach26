@@ -11,6 +11,44 @@ The goal is not generic dashboards. The goal is reliable SuperCoach decision sup
 - better mid-term planning across the next few rounds
 - explainable outputs tied back to SuperCoach scoring logic and league behaviour
 
+## Product Mission
+
+Build a SuperCoach War Room that helps one league manager make sharper weekly and medium-term decisions than their head-to-head opponents by combining:
+
+- live squad and league data
+- player scoring context
+- opponent behaviour modelling
+- planner/state-machine logic
+- clear, explainable outputs
+
+The product should help answer:
+
+- what should I do this week
+- what are my opponent and league mates likely to do
+- which buys are strongest in the context of this league, not just in a vacuum
+- how should I trade, captain, reserve, and disguise my side under rolling lockout
+
+## Current Deliverables
+
+The repo is aiming toward these concrete deliverables:
+
+1. A stable Shiny app that loads and refreshes cleanly from bundled data.
+2. Reliable league, trade, finance, and matchup tables.
+3. A rolling lockout planner with legal move sequencing and explainable targets.
+4. Stronger player scoring and trade scoring informed by role, minutes, matchup, form, and league context.
+5. Useful diagnostics and exports so broken behaviour can be reported without screenshots.
+6. Automated refresh and alerting workflows, including matchup/trade notifications.
+
+## Near-Term Priorities
+
+Until explicitly changed, prefer work that improves one of these:
+
+1. Planner legality and planner explainability
+2. Trade-page live signal accuracy
+3. Better player scoring / projection logic
+4. Better opponent modelling for head-to-head strategy
+5. Better diagnostics, smoke checks, and deploy confidence
+
 ## Working Style
 
 Treat this repo like a live strategy product with brittle workflow edges.

@@ -3347,6 +3347,8 @@ ui <- page_navbar(
         div(
           class = "action-bar",
           actionButton("refresh_app_data", "Reload Bundled Snapshot", class = "btn-sc"),
+          actionButton("build_diagnostics", "Diagnostics", class = "btn-sc-outline"),
+          downloadButton("download_app_diagnostics", "Download Diagnostics", class = "btn-sc-outline"),
           downloadButton("download_prompt_pack", "Download Latest GPT Pack", class = "btn-sc-outline")
         ),
         tags$div(class = "hero-note", textOutput("snapshot_status_text"))
@@ -3400,8 +3402,12 @@ ui <- page_navbar(
     card(
       class = "sc-card",
       full_screen = TRUE,
-      card_header("Data Diagnostics"),
-      verbatimTextOutput("data_diagnostic_text")
+      card_header("App Diagnostics"),
+      card_body(
+        tags$div(class = "section-note", textOutput("diagnostics_status_text")),
+        verbatimTextOutput("data_diagnostic_text"),
+        verbatimTextOutput("diagnostics_preview_text")
+      )
     )
   ),
   nav_panel(
@@ -5932,26 +5938,187 @@ server <- function(input, output, session) {
     }
   })
 
-  output$data_diagnostic_text <- renderText({
-    data <- dashboard_data()
+  diagnostics_bundle <- eventReactive(input$build_diagnostics, {
+    capture_value <- function(expr) {
+      tryCatch(expr, error = function(e) structure(list(error = conditionMessage(e)), class = "diagnostic_capture_error"))
+    }
 
-    lines <- c(
-      paste0("bundled_data_dir: ", normalizePath(bundled_data_dir, winslash = "/", mustWork = FALSE)),
-      paste0("runtime_data_dir: ", normalizePath(data_dir, winslash = "/", mustWork = FALSE)),
-      paste0("bundled_populated: ", data_dir_is_populated(bundled_data_dir)),
-      paste0("runtime_populated: ", data_dir_is_populated(data_dir)),
-      paste0("game_rules_rows: ", if (is.null(data$game_rules)) 0 else nrow(data$game_rules)),
-      paste0("fixtures_rows: ", if (is.null(data$fixtures_history)) 0 else nrow(data$fixtures_history)),
-      paste0("ladder_rows: ", if (is.null(data$ladder_history)) 0 else nrow(data$ladder_history)),
-      paste0("squad_rows: ", if (is.null(data$squad_round_enriched)) 0 else nrow(data$squad_round_enriched)),
-      paste0("cash_rows: ", if (is.null(data$cash_generation)) 0 else nrow(data$cash_generation)),
-      paste0("refresh_log_rows: ", if (is.null(data$source_refresh_log)) 0 else nrow(data$source_refresh_log)),
-      paste0("zero_tackle_rows: ", if (is.null(zero_tackle_injuries())) 0 else nrow(zero_tackle_injuries())),
-      paste0("trade_log_rows: ", if (is.null(trade_log())) 0 else nrow(trade_log()))
+    clean_capture <- function(x, max_rows = NULL) {
+      if (inherits(x, "diagnostic_capture_error")) {
+        return(list(error = x$error))
+      }
+      if (is.null(x)) {
+        return(NULL)
+      }
+      if (is.data.frame(x)) {
+        out <- x
+        if (!is.null(max_rows) && nrow(out) > max_rows) {
+          out <- out %>% slice_head(n = max_rows)
+        }
+        return(out)
+      }
+      if (is.list(x)) {
+        return(lapply(x, clean_capture, max_rows = max_rows))
+      }
+      x
+    }
+
+    data <- dashboard_data()
+    matchup <- capture_value(current_matchup())
+    finance <- capture_value(finance_snapshot())
+    trade_log_tbl <- capture_value(trade_log())
+    live_trade_tbl <- capture_value(live_trade_log_current_round())
+    source_health_tbl <- capture_value(source_health())
+    planner_trade_state <- capture_value(planner_trade_bundle())
+    planner_cvc_state <- capture_value(planner_cvc_recommendations())
+    planner_state <- capture_value(planner_bundle())
+
+    planner_inputs <- list(
+      trade_out_1 = input$planner_trade_out_1 %||% "",
+      trade_in_1 = input$planner_trade_in_1 %||% "",
+      trade_out_2 = input$planner_trade_out_2 %||% "",
+      trade_in_2 = input$planner_trade_in_2 %||% "",
+      trade_out_3 = input$planner_trade_out_3 %||% "",
+      trade_in_3 = input$planner_trade_in_3 %||% "",
+      cvc_choice = input$planner_cvc_choice %||% "",
+      confirm_clicks = input$planner_confirm_trades %||% 0,
+      generate_clicks = input$planner_generate %||% 0
     )
 
-    paste(lines, collapse = "\n")
+    bundle <- list(
+      generated_at_aest = format(Sys.time(), tz = "Australia/Sydney", usetz = TRUE),
+      app = list(
+        planner_build = planner_logic_build,
+        league_id = league_id,
+        bundled_data_dir = normalizePath(bundled_data_dir, winslash = "/", mustWork = FALSE),
+        runtime_data_dir = normalizePath(data_dir, winslash = "/", mustWork = FALSE),
+        bundled_populated = data_dir_is_populated(bundled_data_dir),
+        runtime_populated = data_dir_is_populated(data_dir)
+      ),
+      mission = list(
+        product = "SuperCoach War Room",
+        objective = "Support stronger SuperCoach decisions through league-aware strategy, player scoring context, planner state logic, and explainable outputs.",
+        current_focus = "Stabilise Planner state-machine behaviour and make post-republish debugging much easier."
+      ),
+      snapshot = list(
+        current_round = capture_value(current_round()),
+        snapshot_round = capture_value(snapshot_round()),
+        snapshot_status = capture_value(snapshot_status()),
+        prompt_status = capture_value(prompt_status()),
+        matchup = clean_capture(matchup),
+        data_rows = list(
+          game_rules = if (is.null(data$game_rules)) 0 else nrow(data$game_rules),
+          fixtures_history = if (is.null(data$fixtures_history)) 0 else nrow(data$fixtures_history),
+          ladder_history = if (is.null(data$ladder_history)) 0 else nrow(data$ladder_history),
+          squad_round_enriched = if (is.null(data$squad_round_enriched)) 0 else nrow(data$squad_round_enriched),
+          cash_generation = if (is.null(data$cash_generation)) 0 else nrow(data$cash_generation),
+          source_refresh_log = if (is.null(data$source_refresh_log)) 0 else nrow(data$source_refresh_log),
+          league_trade_log = if (inherits(trade_log_tbl, "diagnostic_capture_error") || is.null(trade_log_tbl)) 0 else nrow(trade_log_tbl)
+        ),
+        latest_refresh_rows = clean_capture(if (is.null(data$source_refresh_log)) NULL else data$source_refresh_log %>% slice_tail(n = 8), max_rows = 8),
+        source_health = clean_capture(source_health_tbl, max_rows = 20)
+      ),
+      finance = list(
+        finance_snapshot = clean_capture(finance, max_rows = 20),
+        live_trade_watch = clean_capture(live_trade_tbl, max_rows = 30),
+        league_trade_log_head = clean_capture(if (inherits(trade_log_tbl, "diagnostic_capture_error")) trade_log_tbl else trade_log_tbl %>% slice_head(n = 40), max_rows = 40)
+      ),
+      planner = list(
+        planner_build = planner_logic_build,
+        inputs = planner_inputs,
+        trade_status_text = capture_value({
+          bundle <- planner_trade_bundle()
+          trades_complete <- bundle$trades_complete
+          notes <- bundle$notes
+          summary <- if (nrow(trades_complete)) {
+            paste0("Confirmed trades: ", paste0(trades_complete$out_player, " -> ", trades_complete$in_player, collapse = " | "))
+          } else {
+            "Confirmed trades: no trade."
+          }
+          if (length(notes)) paste(c(summary, paste(notes, collapse = " | ")), collapse = " ") else summary
+        }),
+        planner_status_text = capture_value(planner_bundle()$status_text),
+        confirmed_trade_bundle = clean_capture(planner_trade_state, max_rows = 50),
+        cvc_recommendations = clean_capture(planner_cvc_state, max_rows = 12),
+        starting_setup = clean_capture(if (inherits(planner_state, "diagnostic_capture_error")) planner_state else planner_state$starting_setup, max_rows = 40),
+        move_schedule = clean_capture(if (inherits(planner_state, "diagnostic_capture_error")) NULL else planner_state$move_schedule, max_rows = 40),
+        final_setup = clean_capture(if (inherits(planner_state, "diagnostic_capture_error")) NULL else planner_state$final_setup, max_rows = 40)
+      ),
+      operator_guidance = list(
+        when_sharing_back = "Paste the diagnostics preview text or upload the downloaded JSON rather than sending screenshots.",
+        best_bug_report_shape = c(
+          "tab or section",
+          "exact scenario",
+          "bad row / bad state",
+          "expected outcome"
+        )
+      )
+    )
+
+    list(
+      filename = paste0("supercoach-diagnostics-", format(Sys.time(), "%Y%m%d-%H%M%S"), ".json"),
+      json = jsonlite::toJSON(bundle, dataframe = "rows", auto_unbox = TRUE, pretty = TRUE, null = "null", na = "null", POSIXt = "ISO8601"),
+      summary = paste(
+        c(
+          paste0("Planner build: ", planner_logic_build),
+          paste0("Current round: ", capture_value(current_round()) %||% "NA"),
+          paste0("Planner confirm clicks: ", planner_inputs$confirm_clicks),
+          paste0("Planner generate clicks: ", planner_inputs$generate_clicks),
+          if (inherits(planner_state, "diagnostic_capture_error")) paste0("Planner error: ", planner_state$error) else "Planner bundle available",
+          if (inherits(live_trade_tbl, "diagnostic_capture_error")) paste0("Live trade watch error: ", live_trade_tbl$error) else paste0("Live trade rows: ", if (is.null(live_trade_tbl)) 0 else nrow(live_trade_tbl))
+        ),
+        collapse = "\n"
+      )
+    )
+  }, ignoreInit = TRUE)
+
+  output$diagnostics_status_text <- safe_text({
+    diag <- diagnostics_bundle()
+    paste("Diagnostics pack ready.", diag$filename)
+  }, fallback = "Click Diagnostics to build a structured app-state pack you can send back instead of screenshots.")
+
+  output$diagnostics_preview_text <- safe_text({
+    diag <- diagnostics_bundle()
+    preview <- substr(diag$json, 1, 12000)
+    if (nchar(diag$json) > 12000) paste0(preview, "\n\n...preview truncated...") else preview
+  }, fallback = "No diagnostics pack built yet.")
+
+  output$data_diagnostic_text <- renderText({
+    diag <- tryCatch(diagnostics_bundle(), error = function(e) NULL)
+    if (!is.null(diag)) {
+      return(diag$summary)
+    }
+
+    data <- dashboard_data()
+    paste(
+      c(
+        paste0("bundled_data_dir: ", normalizePath(bundled_data_dir, winslash = "/", mustWork = FALSE)),
+        paste0("runtime_data_dir: ", normalizePath(data_dir, winslash = "/", mustWork = FALSE)),
+        paste0("bundled_populated: ", data_dir_is_populated(bundled_data_dir)),
+        paste0("runtime_populated: ", data_dir_is_populated(data_dir)),
+        paste0("game_rules_rows: ", if (is.null(data$game_rules)) 0 else nrow(data$game_rules)),
+        paste0("fixtures_rows: ", if (is.null(data$fixtures_history)) 0 else nrow(data$fixtures_history)),
+        paste0("ladder_rows: ", if (is.null(data$ladder_history)) 0 else nrow(data$ladder_history)),
+        paste0("squad_rows: ", if (is.null(data$squad_round_enriched)) 0 else nrow(data$squad_round_enriched)),
+        paste0("cash_rows: ", if (is.null(data$cash_generation)) 0 else nrow(data$cash_generation)),
+        paste0("refresh_log_rows: ", if (is.null(data$source_refresh_log)) 0 else nrow(data$source_refresh_log)),
+        paste0("zero_tackle_rows: ", if (is.null(zero_tackle_injuries())) 0 else nrow(zero_tackle_injuries())),
+        paste0("trade_log_rows: ", if (is.null(trade_log())) 0 else nrow(trade_log()))
+      ),
+      collapse = "\n"
+    )
   })
+
+  output$download_app_diagnostics <- downloadHandler(
+    filename = function() {
+      diag <- diagnostics_bundle()
+      diag$filename
+    },
+    content = function(file) {
+      diag <- diagnostics_bundle()
+      writeLines(diag$json, file, useBytes = TRUE)
+    }
+  )
 
   output$download_prompt_pack <- downloadHandler(
     filename = function() {

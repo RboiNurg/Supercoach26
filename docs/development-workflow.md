@@ -91,6 +91,27 @@ Expected: once Howarth locks on field he should be frozen
 
 That is much faster to debug than “planner still broken”.
 
+### 6. Use the in-app diagnostics pack
+
+The Overview page now includes a `Diagnostics` action.
+
+Use it when:
+
+- a deployed table looks wrong
+- a planner scenario behaves strangely
+- a live trade/finance section looks stale
+- you want to show the current app state without screenshots
+
+Recommended workflow:
+
+1. Open `Overview`
+2. Click `Diagnostics`
+3. Review the short summary block
+4. Click `Download Diagnostics`
+5. Paste the preview text back into chat or share the downloaded JSON contents
+
+This is the preferred debugging loop for deployed app issues.
+
 ## Verification Levels
 
 ### Level 1: Parse check
