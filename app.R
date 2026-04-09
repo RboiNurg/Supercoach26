@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-score-smoothing-20260409f"
+planner_logic_build <- "planner-role-sense-20260409g"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -140,6 +140,7 @@ load_dashboard_data <- function() {
     league_trade_round_summary = read_optional_rds(file.path(data_dir, "league_trade_round_summary.rds")),
     league_trade_team_summary = read_optional_rds(file.path(data_dir, "league_trade_team_summary.rds")),
     availability_risk = read_required_rds(file.path(data_dir, "availability_risk_table.rds")),
+    team_list_role_certainty = read_optional_rds(file.path(data_dir, "team_list_role_certainty.rds")),
     squad_round_enriched = read_required_rds(file.path(data_dir, "squad_round_enriched.rds")),
     cash_generation = read_required_rds(file.path(data_dir, "cash_generation_model.rds")),
     master_player = read_required_rds(file.path(data_dir, "master_player_round_latest.rds")),
@@ -702,6 +703,32 @@ planner_position_lookup <- function(team_players_latest) {
     summarise(
       derived_positions_string = paste(unique(position), collapse = "/"),
       .groups = "drop"
+    )
+}
+
+planner_role_certainty_lookup <- function(team_list_role_certainty) {
+  if (is.null(team_list_role_certainty) || !nrow(team_list_role_certainty)) {
+    return(tibble::tibble(
+      player_id = integer(),
+      likely_minutes_lookup = numeric(),
+      role_change_likelihood_lookup = character(),
+      likely_late_omission_lookup = character(),
+      named_flag_lookup = logical()
+    ))
+  }
+
+  team_list_role_certainty %>%
+    filter(!is.na(player_id)) %>%
+    arrange(desc(round), desc(run_ts)) %>%
+    group_by(player_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      player_id,
+      likely_minutes_lookup = suppressWarnings(as.numeric(likely_minutes)),
+      role_change_likelihood_lookup = tolower(trimws(coalesce(role_change_likelihood, ""))),
+      likely_late_omission_lookup = tolower(trimws(coalesce(likely_late_omission, ""))),
+      named_flag_lookup = named_flag %in% TRUE
     )
 }
 
@@ -2447,6 +2474,7 @@ prepare_planner_roster <- function(
   player_id_lookup,
   position_lookup = NULL,
   availability_risk,
+  role_certainty = NULL,
   zero_tackle_tbl,
   next_fixture_lookup,
   team_performance,
@@ -2503,6 +2531,13 @@ prepare_planner_roster <- function(
     next_opponent = character(),
     opponent_defensive_trend_last_3 = numeric(),
     opponent_defensive_trend_last_5 = numeric()
+  )
+  role_certainty <- role_certainty %||% tibble::tibble(
+    player_id = integer(),
+    likely_minutes_lookup = numeric(),
+    role_change_likelihood_lookup = character(),
+    likely_late_omission_lookup = character(),
+    named_flag_lookup = logical()
   )
   projection_lookup <- projection_lookup %||% tibble::tibble(
     player_id = integer(),
@@ -2625,6 +2660,7 @@ prepare_planner_roster <- function(
     left_join(next_fixture_lookup, by = "team_abbrev") %>%
     left_join(attack_lookup, by = "team_abbrev") %>%
     left_join(opponent_defense_lookup, by = "next_opponent") %>%
+    left_join(role_certainty, by = "player_id") %>%
     left_join(projection_lookup, by = "player_id") %>%
     mutate(
       scoring_positions_string = vapply(
@@ -2677,6 +2713,10 @@ prepare_planner_roster <- function(
       ),
       minutes_average = coalesce(minutes_average_3, minutes_average_5, 0),
       minutes_floor = coalesce(minutes_average_5, minutes_average_3, 0),
+      expected_minutes = case_when(
+        !is.na(likely_minutes_lookup) & likely_minutes_lookup > 0 ~ likely_minutes_lookup * 0.70 + minutes_average * 0.30,
+        TRUE ~ minutes_average
+      ),
       form_delta = coalesce(recent_average_adjusted, average_3_round, recent_average, 0) - coalesce(form_baseline, 0),
       matchup_rating = coalesce(next_matchup_rating, next_matchup_rating_team, 24),
       attack_trend = coalesce(attacking_trend_last_3, 0),
@@ -2712,11 +2752,23 @@ prepare_planner_roster <- function(
         TRUE ~ environment_bonus * 0.22 + attack_trend * 0.10
       ),
       minutes_bonus = case_when(
-        primary_position == "middle" ~ pmax(minutes_average - 52, 0) * 0.28 + pmax(minutes_floor - 55, 0) * 0.10,
-        primary_position == "edge" ~ pmax(minutes_average - 68, 0) * 0.08 + pmax(minutes_floor - 70, 0) * 0.04,
-        primary_position == "spine" ~ pmax(minutes_average - 65, 0) * 0.10 + pmax(minutes_floor - 65, 0) * 0.05,
-        TRUE ~ pmax(minutes_average - 60, 0) * 0.06
+        primary_position == "middle" ~ pmax(expected_minutes - 52, 0) * 0.28 + pmax(minutes_floor - 55, 0) * 0.10,
+        primary_position == "edge" ~ pmax(expected_minutes - 68, 0) * 0.08 + pmax(minutes_floor - 70, 0) * 0.04,
+        primary_position == "spine" ~ pmax(expected_minutes - 65, 0) * 0.10 + pmax(minutes_floor - 65, 0) * 0.05,
+        TRUE ~ pmax(expected_minutes - 60, 0) * 0.06
       ),
+      role_penalty_multiplier = case_when(
+        season_anchor >= 60 & recent_average >= 65 ~ 0,
+        season_anchor >= 55 ~ 0.45,
+        TRUE ~ 1
+      ),
+      role_minutes_penalty = case_when(
+        primary_position == "spine" & !is.na(likely_minutes_lookup) & likely_minutes_lookup < 45 ~ (45 - likely_minutes_lookup) * 0.45,
+        primary_position == "edge" & !is.na(likely_minutes_lookup) & likely_minutes_lookup < 55 ~ (55 - likely_minutes_lookup) * 0.35,
+        primary_position == "middle" & !is.na(likely_minutes_lookup) & likely_minutes_lookup < 45 ~ (45 - likely_minutes_lookup) * 0.28,
+        !is.na(likely_minutes_lookup) & likely_minutes_lookup < 40 ~ (40 - likely_minutes_lookup) * 0.20,
+        TRUE ~ 0
+      ) * role_penalty_multiplier,
       class_bonus = pmax(season_anchor - 55, 0) * 0.30 + pmax(form_baseline - 60, 0) * 0.12,
       stability_bonus = case_when(
         coalesce(games_played, 0) >= 5 & season_anchor >= 60 & recent_average >= 55 ~ 4,
@@ -2730,13 +2782,23 @@ prepare_planner_roster <- function(
         ),
       goal_bonus = if_else(grepl("goal|kicker|primary", tolower(coalesce(goal_kicking_status, ""))), 4, 0),
       starting_bonus = if_else(grepl("start", tolower(coalesce(starting_status, ""))), 3, 0),
+      role_change_penalty = case_when(
+        role_change_likelihood_lookup == "high" ~ 8,
+        role_change_likelihood_lookup == "medium" ~ 4,
+        TRUE ~ 0
+      ) * role_penalty_multiplier,
+      omission_penalty = case_when(
+        grepl("high|probable|likely", tolower(coalesce(likely_late_omission_lookup, ""))) ~ 12,
+        grepl("medium|monitor|watch", tolower(coalesce(likely_late_omission_lookup, ""))) ~ 6,
+        TRUE ~ 0
+      ) * role_penalty_multiplier,
       risk_penalty = case_when(
         risk_band == "high" ~ 38,
         risk_band == "medium" ~ 18,
         TRUE ~ 0
       ),
       inactive_penalty = if_else(active_flag %in% FALSE, 18, 0),
-      bye_penalty = if_else(bye_this_round, 12, 0),
+      bye_penalty = if_else(bye_this_round, 120, 0),
       locked_now = !is.na(next_kickoff_utc) & as.POSIXct(now, tz = "UTC") >= next_kickoff_utc,
       real_score = projection_signal * 0.26 +
         recent_average * 0.28 +
@@ -2755,6 +2817,9 @@ prepare_planner_roster <- function(
         schedule_bonus +
         goal_bonus +
         starting_bonus -
+        role_minutes_penalty -
+        role_change_penalty -
+        omission_penalty -
         risk_penalty -
         inactive_penalty -
         bye_penalty -
@@ -3804,6 +3869,7 @@ server <- function(input, output, session) {
     data <- dashboard_data()
     projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
     position_lookup <- planner_position_lookup(data$team_players_latest)
+    role_certainty_lookup <- planner_role_certainty_lookup(data$team_list_role_certainty)
 
     prepare_planner_roster(
       base_players = data$master_player %>%
@@ -3817,6 +3883,7 @@ server <- function(input, output, session) {
       player_id_lookup = data$player_id_lookup,
       position_lookup = position_lookup,
       availability_risk = data$availability_risk,
+      role_certainty = role_certainty_lookup,
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
       team_performance = data$team_performance,
@@ -3830,6 +3897,7 @@ server <- function(input, output, session) {
     context <- planner_context()
     projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
     position_lookup <- planner_position_lookup(data$team_players_latest)
+    role_certainty_lookup <- planner_role_certainty_lookup(data$team_list_role_certainty)
     req(!is.na(context$my_team_id))
 
     snapshot <- latest_team_players_snapshot(data$team_players_latest, context$my_team_id)
@@ -3841,6 +3909,7 @@ server <- function(input, output, session) {
       player_id_lookup = data$player_id_lookup,
       position_lookup = position_lookup,
       availability_risk = data$availability_risk,
+      role_certainty = role_certainty_lookup,
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
       team_performance = data$team_performance,
