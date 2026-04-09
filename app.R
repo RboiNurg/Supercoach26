@@ -4266,6 +4266,16 @@ server <- function(input, output, session) {
       field_ids = pre_assign$player_id,
       reserve_ids = pre_reserves
     )
+    trade_deadline <- if (length(trade_in_ids)) {
+      incoming_times <- future_roster %>%
+        filter(player_id %in% trade_in_ids) %>%
+        pull(next_kickoff_utc)
+      incoming_times <- incoming_times[!is.na(incoming_times)]
+      if (length(incoming_times)) min(incoming_times) - 10 * 60 else NA
+    } else {
+      NA
+    }
+
     post_reserve_seed <- apply_trades_to_reserves(pre_reserves, trades_complete)
     post_bench_seed <- apply_trades_to_bench_ids(pre_bench_ids, trades_complete)
     post_bench_ids <- post_bench_seed
@@ -4315,16 +4325,6 @@ server <- function(input, output, session) {
       setNames(future_roster$player, as.character(future_roster$player_id))
     )
     player_lookup <- player_lookup[!duplicated(names(player_lookup))]
-
-    trade_deadline <- if (length(trade_in_ids)) {
-      incoming_times <- future_roster %>%
-        filter(player_id %in% trade_in_ids) %>%
-        pull(next_kickoff_utc)
-      incoming_times <- incoming_times[!is.na(incoming_times)]
-      if (length(incoming_times)) min(incoming_times) - 10 * 60 else NA
-    } else {
-      NA
-    }
 
     state_assign <- pre_assign
     state_reserves <- pre_reserves
