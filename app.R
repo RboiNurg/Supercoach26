@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-board-state-20260409h"
+planner_logic_build <- "planner-backsolve-target-20260409i"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -4212,7 +4212,13 @@ server <- function(input, output, session) {
       ideal_final_assign <- solve_best_lineup(future_roster, slots, "real_score")
       req(!is.null(ideal_final_assign), nrow(ideal_final_assign) > 0)
 
-      final_ids <- ideal_final_assign$player_id
+      goal_final_assign <- ideal_final_assign
+      final_ids <- goal_final_assign$player_id
+      goal_final_reserve_ids <- choose_planner_reserves(
+        future_roster,
+        goal_final_assign$player_id,
+        goal_final_assign$player_id
+      )
       kickoff_candidates <- future_roster$next_kickoff_utc[!is.na(future_roster$next_kickoff_utc)]
       first_kickoff <- if (length(kickoff_candidates)) min(kickoff_candidates) else as.POSIXct(NA, tz = "UTC")
 
@@ -4276,21 +4282,9 @@ server <- function(input, output, session) {
       NA
     }
 
-    post_reserve_seed <- apply_trades_to_reserves(pre_reserves, trades_complete)
     post_bench_seed <- apply_trades_to_bench_ids(pre_bench_ids, trades_complete)
     post_bench_ids <- post_bench_seed
-    post_reserves <- plan_window_reserves(
-      players = future_roster,
-      bench_ids = post_bench_ids,
-      current_reserves = post_reserve_seed,
-      goal_reserves = choose_planner_reserves(
-        future_roster,
-        post_assign$player_id,
-        final_ids,
-        current_reserves = post_reserve_seed
-      ),
-      kickoff_value = if (!is.na(trade_deadline)) trade_deadline + 10 * 60 else as.POSIXct(NA, tz = "UTC")
-    )
+    trade_kickoff <- if (!is.na(trade_deadline)) trade_deadline + 10 * 60 else as.POSIXct(NA, tz = "UTC")
 
     cvc_recs <- planner_cvc_recommendations()
     selected_combo <- as.character(input$planner_cvc_choice %||% "")
@@ -4333,31 +4327,73 @@ server <- function(input, output, session) {
     move_rows <- list()
 
     if (nrow(trades_complete)) {
+      post_with_times <- post_assign %>%
+        left_join(
+          future_roster %>%
+            select(player_id, next_kickoff_utc),
+          by = "player_id"
+        ) %>%
+        mutate(target_player_id = goal_final_assign$player_id[match(slot, goal_final_assign$slot)])
+
+      trade_target_slots <- goal_final_assign %>%
+        left_join(
+          future_roster %>%
+            select(player_id, next_kickoff_utc),
+          by = "player_id"
+        ) %>%
+        filter(!is.na(next_kickoff_utc), next_kickoff_utc == trade_kickoff) %>%
+        pull(slot)
+
+      trade_wrong_slots <- post_with_times %>%
+        filter(
+          !is.na(next_kickoff_utc),
+          next_kickoff_utc == trade_kickoff,
+          player_id != target_player_id
+        ) %>%
+        pull(slot)
+
+      trade_forced <- planner_force_slots_to_target(
+        current_assign = post_assign,
+        current_bench_ids = post_bench_ids,
+        target_assign = goal_final_assign,
+        target_slots = union(trade_target_slots, trade_wrong_slots)
+      )
+      trade_assign <- trade_forced$assign
+      trade_bench_ids <- trade_forced$bench_ids
+      carried_trade_reserves <- carry_reserves_by_bench_slots(pre_bench_ids, trade_bench_ids, pre_reserves)
+      post_reserves <- plan_window_reserves(
+        players = future_roster,
+        bench_ids = trade_bench_ids,
+        current_reserves = carried_trade_reserves,
+        goal_reserves = goal_final_reserve_ids,
+        kickoff_value = trade_kickoff
+      )
+
       trade_transfer <- planner_transfer_slot_captaincy(
         from_assign = pre_assign,
-        to_assign = post_assign,
+        to_assign = trade_assign,
         current_vc_id = state_vc_id,
         current_c_id = state_captain_id
       )
       trade_captaincy <- rebalance_planner_captaincy(
-        current_assign = post_assign,
+        current_assign = trade_assign,
         roster = future_roster,
         current_vc_id = trade_transfer$vc_id,
         current_c_id = trade_transfer$captain_id,
         real_vc_id = real_vc_id,
         real_c_id = real_captain_id,
         avoid_lock_ids = setdiff(
-          future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)],
+          future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == trade_kickoff],
           c(real_vc_id, real_captain_id)
         ),
-        force_vc_id = if (!is.na(real_vc_id) && real_vc_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)]) real_vc_id else NA_integer_,
-        force_c_id = if (!is.na(real_captain_id) && real_captain_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)]) real_captain_id else NA_integer_
+        force_vc_id = if (!is.na(real_vc_id) && real_vc_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == trade_kickoff]) real_vc_id else NA_integer_,
+        force_c_id = if (!is.na(real_captain_id) && real_captain_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == trade_kickoff]) real_captain_id else NA_integer_
       )
       state_vc_id <- trade_captaincy$vc_id
       state_captain_id <- trade_captaincy$captain_id
 
       incoming_positions <- vapply(trades_complete$in_id, function(one_id) {
-        slot_hit <- post_assign$slot[match(one_id, post_assign$player_id)]
+        slot_hit <- trade_assign$slot[match(one_id, trade_assign$player_id)]
         if (length(slot_hit) && !is.na(slot_hit)) slot_hit else "Bench"
       }, character(1))
 
@@ -4368,8 +4404,8 @@ server <- function(input, output, session) {
       trade_lineup <- describe_planner_state_changes(
         from_assign = pre_assign,
         from_bench_ids = pre_bench_ids,
-        to_assign = post_assign,
-        to_bench_ids = post_bench_ids,
+        to_assign = trade_assign,
+        to_bench_ids = trade_bench_ids,
         player_lookup = player_lookup
       )
       trade_lineup_parts <- if (identical(trade_lineup$text, "No lineup change")) character() else strsplit(trade_lineup$text, " \\| ", perl = TRUE)[[1]]
@@ -4391,10 +4427,10 @@ server <- function(input, output, session) {
         `Lock Window` = if (!is.na(trade_deadline)) build_lock_window_label(
           trades_complete$in_team[[1]] %||% NA_character_,
           future_roster$next_opponent[match(trades_complete$in_id[[1]], future_roster$player_id)] %||% NA_character_,
-          trade_deadline + 10 * 60
+          trade_kickoff
         ) else "Trade window",
         When = format_planner_time(trade_deadline),
-        `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
+        `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_kickoff) else "No locking players identified",
         Move = trade_move_text,
         `Captaincy Change` = {
           actions <- c(trade_transfer$inherited, trade_captaincy$actions)
@@ -4405,14 +4441,18 @@ server <- function(input, output, session) {
         stringsAsFactors = FALSE,
         check.names = FALSE
       )
-      state_assign <- post_assign
+      state_assign <- trade_assign
       state_reserves <- post_reserves
       state_bench_ids <- trade_lineup$bench_ids
       state_roster <- future_roster
     }
 
     lock_windows <- future_roster %>%
-      filter(!is.na(next_kickoff_utc), !bye_this_round %in% TRUE) %>%
+      filter(
+        !is.na(next_kickoff_utc),
+        !bye_this_round %in% TRUE,
+        is.na(trade_kickoff) | next_kickoff_utc > trade_kickoff
+      ) %>%
       arrange(next_kickoff_utc, desc(real_score), player)
 
     final_plan_groups <- split(lock_windows, as.character(lock_windows$next_kickoff_utc))
@@ -4421,34 +4461,21 @@ server <- function(input, output, session) {
       group_tbl <- final_plan_groups[[group_name]]
       kickoff_value <- group_tbl$next_kickoff_utc[[1]]
 
-      reachable_assign <- planner_reachable_target(
-        roster = state_roster,
-        slots = slots,
-        current_assign = state_assign,
-        current_bench_ids = state_bench_ids,
-        current_reserves = state_reserves,
-        before_kickoff_utc = kickoff_value
-      )
-
-      if (is.null(reachable_assign) || !nrow(reachable_assign)) {
-        next
-      }
-
       current_with_times <- state_assign %>%
         left_join(
           state_roster %>%
             select(player_id, next_kickoff_utc),
           by = "player_id"
         ) %>%
-        mutate(target_player_id = reachable_assign$player_id[match(slot, reachable_assign$slot)])
+        mutate(target_player_id = goal_final_assign$player_id[match(slot, goal_final_assign$slot)])
 
-      target_slots_due_now <- reachable_assign %>%
+      target_slots_due_now <- goal_final_assign %>%
         left_join(
           state_roster %>%
             select(player_id, next_kickoff_utc),
           by = "player_id"
         ) %>%
-        filter(!is.na(next_kickoff_utc), next_kickoff_utc <= kickoff_value) %>%
+        filter(!is.na(next_kickoff_utc), next_kickoff_utc == kickoff_value) %>%
         pull(slot)
 
       wrong_current_slots_due_now <- current_with_times %>%
@@ -4464,7 +4491,7 @@ server <- function(input, output, session) {
       forced_state <- planner_force_slots_to_target(
         current_assign = state_assign,
         current_bench_ids = state_bench_ids,
-        target_assign = reachable_assign,
+        target_assign = goal_final_assign,
         target_slots = target_slots
       )
 
@@ -4491,19 +4518,11 @@ server <- function(input, output, session) {
         current_reserves = carried_reserves,
         before_kickoff_utc = kickoff_value
       )
-      goal_reserves <- choose_planner_reserves(
-        state_roster,
-        batch_assign$player_id,
-        final_ids,
-        current_reserves = carried_reserves,
-        locked_on_ids = locked_state_after_moves$locked_reserve_on_ids,
-        locked_off_ids = locked_state_after_moves$locked_reserve_off_ids
-      )
       next_reserves <- plan_window_reserves(
         players = state_roster,
         bench_ids = move_state$bench_ids,
         current_reserves = carried_reserves,
-        goal_reserves = goal_reserves,
+        goal_reserves = goal_final_reserve_ids,
         kickoff_value = kickoff_value,
         locked_on_ids = locked_state_after_moves$locked_reserve_on_ids,
         locked_off_ids = locked_state_after_moves$locked_reserve_off_ids
@@ -4617,7 +4636,7 @@ server <- function(input, output, session) {
         )
     )
 
-    final_assign_reachable <- state_assign
+    final_assign_reachable <- goal_final_assign
 
     final_active_setup <- final_assign_reachable %>%
       left_join(
@@ -4647,7 +4666,7 @@ server <- function(input, output, session) {
         )
       )
 
-    final_reserve_ids <- state_reserves %||% integer()
+    final_reserve_ids <- goal_final_reserve_ids %||% integer()
     final_bench <- build_planner_bench_state(
       players = future_roster,
       field_ids = final_assign_reachable$player_id,
