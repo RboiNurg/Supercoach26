@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-score-balance-20260409d"
+planner_logic_build <- "planner-captain-transfer-20260409e"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -1403,14 +1403,71 @@ choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_,
   list(vc_id = vc_id, captain_id = captain_id)
 }
 
-rebalance_planner_captaincy <- function(current_assign, roster, current_vc_id = NA_integer_, current_c_id = NA_integer_, real_vc_id = NA_integer_, real_c_id = NA_integer_) {
+planner_transfer_slot_captaincy <- function(from_assign, to_assign, current_vc_id = NA_integer_, current_c_id = NA_integer_) {
+  if (is.null(from_assign) || !nrow(from_assign) || is.null(to_assign) || !nrow(to_assign)) {
+    return(list(vc_id = current_vc_id, captain_id = current_c_id, inherited = character()))
+  }
+
+  transfer_one <- function(current_id, label) {
+    if (is.na(current_id)) {
+      return(list(id = current_id, inherited = character()))
+    }
+
+    source_slot <- from_assign$slot[match(current_id, from_assign$player_id)]
+    if (!length(source_slot) || is.na(source_slot) || !nzchar(source_slot)) {
+      return(list(id = current_id, inherited = character()))
+    }
+
+    inherited_id <- to_assign$player_id[match(source_slot, to_assign$slot)]
+    if (!length(inherited_id) || is.na(inherited_id)) {
+      return(list(id = NA_integer_, inherited = character()))
+    }
+
+    inherited_note <- if (!identical(inherited_id, current_id)) {
+      paste0(label, " rode with slot ", source_slot)
+    } else {
+      character()
+    }
+
+    list(id = inherited_id, inherited = inherited_note)
+  }
+
+  vc_transfer <- transfer_one(current_vc_id, "VC")
+  c_transfer <- transfer_one(current_c_id, "C")
+
+  list(
+    vc_id = vc_transfer$id,
+    captain_id = c_transfer$id,
+    inherited = c(vc_transfer$inherited, c_transfer$inherited)
+  )
+}
+
+rebalance_planner_captaincy <- function(
+  current_assign,
+  roster,
+  current_vc_id = NA_integer_,
+  current_c_id = NA_integer_,
+  real_vc_id = NA_integer_,
+  real_c_id = NA_integer_,
+  avoid_lock_ids = integer(),
+  force_vc_id = NA_integer_,
+  force_c_id = NA_integer_
+) {
   if (is.null(current_assign) || !nrow(current_assign)) {
     return(list(vc_id = NA_integer_, captain_id = NA_integer_, actions = character()))
   }
 
   available_ids <- unique(current_assign$player_id)
+  avoid_lock_ids <- avoid_lock_ids %||% integer()
   vc_id <- if (!is.na(current_vc_id) && current_vc_id %in% available_ids) current_vc_id else NA_integer_
   captain_id <- if (!is.na(current_c_id) && current_c_id %in% available_ids) current_c_id else NA_integer_
+
+  if (!is.na(vc_id) && vc_id %in% avoid_lock_ids && !identical(vc_id, force_vc_id) && !identical(vc_id, real_vc_id)) {
+    vc_id <- NA_integer_
+  }
+  if (!is.na(captain_id) && captain_id %in% avoid_lock_ids && !identical(captain_id, force_c_id) && !identical(captain_id, real_c_id)) {
+    captain_id <- NA_integer_
+  }
 
   fallback_pair <- choose_bogus_captaincy(
     pre_assign = current_assign,
@@ -1419,11 +1476,21 @@ rebalance_planner_captaincy <- function(current_assign, roster, current_vc_id = 
     real_c_id = real_c_id
   )
 
+  if (!is.na(force_vc_id) && force_vc_id %in% available_ids) {
+    vc_id <- force_vc_id
+  }
   if (is.na(vc_id)) {
-    vc_id <- fallback_pair$vc_id
+    vc_pool <- c(fallback_pair$vc_id, fallback_pair$captain_id, setdiff(available_ids, avoid_lock_ids))
+    vc_pool <- vc_pool[!is.na(vc_pool)]
+    vc_pool <- unique(vc_pool)
+    vc_id <- if (length(vc_pool)) vc_pool[[1]] else NA_integer_
+  }
+
+  if (!is.na(force_c_id) && force_c_id %in% available_ids && !identical(force_c_id, vc_id)) {
+    captain_id <- force_c_id
   }
   if (is.na(captain_id) || identical(captain_id, vc_id)) {
-    captain_pool <- c(fallback_pair$captain_id, fallback_pair$vc_id, setdiff(available_ids, vc_id))
+    captain_pool <- c(fallback_pair$captain_id, fallback_pair$vc_id, setdiff(available_ids, c(vc_id, avoid_lock_ids)))
     captain_pool <- captain_pool[!is.na(captain_pool)]
     captain_pool <- unique(captain_pool)
     captain_pool <- captain_pool[captain_pool != vc_id]
@@ -3787,13 +3854,25 @@ server <- function(input, output, session) {
     move_rows <- list()
 
     if (nrow(trades_complete)) {
+      trade_transfer <- planner_transfer_slot_captaincy(
+        from_assign = pre_assign,
+        to_assign = post_assign,
+        current_vc_id = state_vc_id,
+        current_c_id = state_captain_id
+      )
       trade_captaincy <- rebalance_planner_captaincy(
         current_assign = post_assign,
         roster = future_roster,
-        current_vc_id = state_vc_id,
-        current_c_id = state_captain_id,
+        current_vc_id = trade_transfer$vc_id,
+        current_c_id = trade_transfer$captain_id,
         real_vc_id = real_vc_id,
-        real_c_id = real_captain_id
+        real_c_id = real_captain_id,
+        avoid_lock_ids = setdiff(
+          future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)],
+          c(real_vc_id, real_captain_id)
+        ),
+        force_vc_id = if (!is.na(real_vc_id) && real_vc_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)]) real_vc_id else NA_integer_,
+        force_c_id = if (!is.na(real_captain_id) && real_captain_id %in% future_roster$player_id[!is.na(future_roster$next_kickoff_utc) & future_roster$next_kickoff_utc == (trade_deadline + 10 * 60)]) real_captain_id else NA_integer_
       )
       state_vc_id <- trade_captaincy$vc_id
       state_captain_id <- trade_captaincy$captain_id
@@ -3838,7 +3917,10 @@ server <- function(input, output, session) {
         When = format_planner_time(trade_deadline),
         `Players Locking` = if (!is.na(trade_deadline)) describe_locking_players(future_roster, trade_deadline + 10 * 60) else "No locking players identified",
         Move = trade_move_text,
-        `Captaincy Change` = if (length(trade_captaincy$actions)) paste(trade_captaincy$actions, collapse = " | ") else "No captaincy change",
+        `Captaincy Change` = {
+          actions <- c(trade_transfer$inherited, trade_captaincy$actions)
+          if (length(actions)) paste(actions, collapse = " | ") else "No captaincy change"
+        },
         `Reserve Change` = describe_reserve_transition(pre_reserves, post_reserves, player_lookup),
         Why = "Latest safe window to complete the selected trades and still keep the real side hidden before the incoming players lock.",
         stringsAsFactors = FALSE,
@@ -3933,16 +4015,27 @@ server <- function(input, output, session) {
         final_ids,
         current_reserves = carried_reserves
       )
-      captaincy_actions <- character()
-
-      if (!is.na(real_vc_id) && real_vc_id %in% group_tbl$player_id && !identical(state_vc_id, real_vc_id)) {
-        captaincy_actions <- c(captaincy_actions, paste0("Set VC to ", player_lookup[as.character(real_vc_id)]))
-        state_vc_id <- real_vc_id
-      }
-      if (!is.na(real_captain_id) && real_captain_id %in% group_tbl$player_id && !identical(state_captain_id, real_captain_id)) {
-        captaincy_actions <- c(captaincy_actions, paste0("Set C to ", player_lookup[as.character(real_captain_id)]))
-        state_captain_id <- real_captain_id
-      }
+      transfer_captaincy <- planner_transfer_slot_captaincy(
+        from_assign = state_assign,
+        to_assign = batch_assign,
+        current_vc_id = state_vc_id,
+        current_c_id = state_captain_id
+      )
+      group_lock_ids <- group_tbl$player_id
+      rebalanced_captaincy <- rebalance_planner_captaincy(
+        current_assign = batch_assign,
+        roster = state_roster,
+        current_vc_id = transfer_captaincy$vc_id,
+        current_c_id = transfer_captaincy$captain_id,
+        real_vc_id = real_vc_id,
+        real_c_id = real_captain_id,
+        avoid_lock_ids = setdiff(group_lock_ids, c(real_vc_id, real_captain_id)),
+        force_vc_id = if (!is.na(real_vc_id) && real_vc_id %in% group_lock_ids) real_vc_id else NA_integer_,
+        force_c_id = if (!is.na(real_captain_id) && real_captain_id %in% group_lock_ids) real_captain_id else NA_integer_
+      )
+      captaincy_actions <- c(transfer_captaincy$inherited, rebalanced_captaincy$actions)
+      state_vc_id <- rebalanced_captaincy$vc_id
+      state_captain_id <- rebalanced_captaincy$captain_id
 
       move_rows[[length(move_rows) + 1L]] <- data.frame(
         Step = length(move_rows) + 1L,
