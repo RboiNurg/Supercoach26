@@ -194,9 +194,80 @@ latest_team_finance <- function(ladder_history) {
     )
 }
 
-live_team_finance <- function(team_players_latest, master_player, ladder_history) {
+prior_round_team_finance <- function(ladder_history, current_round) {
+  if (is.null(ladder_history) || !nrow(ladder_history) || is.na(current_round)) {
+    return(NULL)
+  }
+
+  ladder_history %>%
+    filter(
+      round < current_round,
+      !is.na(team_value_total_calc) | !is.na(cash_end_round_calc) | !is.na(squad_value_calc)
+    ) %>%
+    arrange(user_team_id, desc(round), desc(run_ts)) %>%
+    group_by(user_team_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    transmute(
+      user_team_id,
+      prior_finance_round = round,
+      prior_cash_end_round_calc = cash_end_round_calc,
+      prior_team_value_total_calc = team_value_total_calc
+    )
+}
+
+live_round_trade_log <- function(
+  team_players_latest,
+  player_id_lookup = NULL,
+  player_price_history = NULL,
+  ladder_history = NULL,
+  actual_trade_history = NULL,
+  current_round = NA_integer_
+) {
+  if (is.na(current_round)) {
+    return(NULL)
+  }
+
+  live_log <- build_trade_log(
+    team_players_latest = team_players_latest,
+    player_id_lookup = player_id_lookup,
+    player_price_history = player_price_history,
+    ladder_history = ladder_history,
+    actual_trade_history = actual_trade_history
+  )
+
+  if (is.null(live_log) || !nrow(live_log)) {
+    return(NULL)
+  }
+
+  live_log %>%
+    filter(round == current_round) %>%
+    arrange(user_team_id, desc(trade_source), buy_player_name, sell_player_name)
+}
+
+live_round_trade_cash_summary <- function(live_trade_log) {
+  if (is.null(live_trade_log) || !nrow(live_trade_log)) {
+    return(NULL)
+  }
+
+  live_trade_log %>%
+    group_by(user_team_id, team_name, coach_name) %>%
+    summarise(
+      live_trade_rows = n(),
+      live_actual_trade_rows = sum(trade_source == "actual_api", na.rm = TRUE),
+      live_inferred_trade_rows = sum(trade_source != "actual_api", na.rm = TRUE),
+      live_total_buy_price = sum(coalesce(buy_price, 0), na.rm = TRUE),
+      live_total_sell_price = sum(coalesce(sell_price, 0), na.rm = TRUE),
+      live_cash_delta = sum(coalesce(sell_price, 0) - coalesce(buy_price, 0), na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+live_team_finance <- function(team_players_latest, master_player, ladder_history, current_round = NA_integer_, live_trade_log = NULL) {
   latest_players <- latest_team_players_snapshot(team_players_latest)
   finance_base <- latest_team_finance(ladder_history)
+  prior_finance <- prior_round_team_finance(ladder_history, current_round)
+  live_trade_cash <- live_round_trade_cash_summary(live_trade_log)
 
   if (is.null(latest_players) || !nrow(latest_players) || is.null(master_player) || !nrow(master_player)) {
     return(finance_base)
@@ -215,8 +286,20 @@ live_team_finance <- function(team_players_latest, master_player, ladder_history
       .groups = "drop"
     ) %>%
     left_join(finance_base, by = "user_team_id") %>%
+    left_join(prior_finance, by = "user_team_id") %>%
+    left_join(live_trade_cash, by = "user_team_id") %>%
     mutate(
-      live_cash_end_round_calc = finance_cash_end_round_calc,
+      finance_cash_base = case_when(
+        !is.na(current_round) & latest_round == current_round ~ coalesce(prior_cash_end_round_calc, finance_cash_end_round_calc),
+        TRUE ~ finance_cash_end_round_calc
+      ),
+      live_trade_rows = coalesce(live_trade_rows, 0L),
+      live_actual_trade_rows = coalesce(live_actual_trade_rows, 0L),
+      live_inferred_trade_rows = coalesce(live_inferred_trade_rows, 0L),
+      live_total_buy_price = coalesce(live_total_buy_price, 0),
+      live_total_sell_price = coalesce(live_total_sell_price, 0),
+      live_cash_delta = coalesce(live_cash_delta, 0),
+      live_cash_end_round_calc = finance_cash_base + if_else(!is.na(current_round) & latest_round == current_round, live_cash_delta, 0),
       live_team_value_total_calc = live_squad_value_calc + coalesce(live_cash_end_round_calc, 0)
     )
 }
@@ -2584,6 +2667,22 @@ build_field_dictionary <- function() {
     "League Table", "Total Value", "Squad Value plus Cash.",
     "League Table", "Changes", "Latest detected trade/change count for that team, using actual API trades where available and inferred roster deltas otherwise.",
     "League Table", "Boosts Used", "Trade boosts used by that team so far.",
+    "Live Round Trade Watch", "Side", "Whether the live trade row belongs to you, your current opponent, or the wider league.",
+    "Live Round Trade Watch", "Source", "Actual API means the trade row came directly from SuperCoach trade data; inferred means it was derived from a saved current-round roster delta.",
+    "Live Round Trade Watch", "Sell Price (R-1)", "Sell price locked to the previous completed round's price, which is the correct current-round trade-pricing basis.",
+    "Live Round Trade Watch", "Buy Price (R-1)", "Buy price locked to the previous completed round's price, matching the live round trade-pricing rule.",
+    "Live Round Trade Watch", "Cash Delta", "Sell price minus buy price for that detected current-round trade row.",
+    "Live Trade Finance Impact", "Latest Squad Pull", "Most recent round where a saved squad snapshot exists for that team.",
+    "Live Trade Finance Impact", "Finance Base Round", "Completed round used as the starting cash position before applying currently detected live trades.",
+    "Live Trade Finance Impact", "Live Trade Rows", "Detected current-round trade rows for that team.",
+    "Live Trade Finance Impact", "Actual API Rows", "How many live trade rows came directly from the SuperCoach API.",
+    "Live Trade Finance Impact", "Inferred Rows", "How many live trade rows were inferred from current-round roster deltas.",
+    "Live Trade Finance Impact", "Buy Total (R-1)", "Sum of current-round buy prices using previous-round prices.",
+    "Live Trade Finance Impact", "Sell Total (R-1)", "Sum of current-round sell prices using previous-round prices.",
+    "Live Trade Finance Impact", "Live Cash Delta", "Net cash generated or spent by currently detected live trades.",
+    "Live Trade Finance Impact", "Live Cash", "Base cash from the last completed round plus current-round live trade cash delta.",
+    "Live Trade Finance Impact", "Live Squad Value", "Current squad priced at today's player prices for the latest detected roster snapshot.",
+    "Live Trade Finance Impact", "Live Total Value", "Live Squad Value plus Live Cash.",
     "Fixture Runway Breakdown", "Side", "You or your current opponent.",
     "Fixture Runway Breakdown", "Round", "NRL round in the forward runway.",
     "Fixture Runway Breakdown", "Club", "NRL club represented in that side's latest known squad.",
@@ -3144,6 +3243,20 @@ ui <- page_navbar(
     card(
       class = "sc-card",
       full_screen = TRUE,
+      card_header("Live Round Trade Watch"),
+      responsive_table("live_round_trade_table"),
+      card_footer(class = "section-note", "Current-round trade rows use actual API trades where available and otherwise infer roster deltas once a round snapshot exists. Buy/sell prices are locked to the previous completed round's price.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
+      card_header("Live Trade Finance Impact"),
+      responsive_table("live_trade_finance_table"),
+      card_footer(class = "section-note", "Live bank starts from the last completed round's cash balance, then applies any currently detected round trades using previous-round prices. If a team has not yet been pulled for the live round, its cash stays on the last known value.")
+    ),
+    card(
+      class = "sc-card",
+      full_screen = TRUE,
       card_header("Current Matchup Trade Log"),
       responsive_table("matchup_trade_table"),
       card_footer(class = "section-note", "Trade price is approximated at the previous round's finalised price. Source shows whether the row came from the SuperCoach API or roster-delta inference.")
@@ -3417,6 +3530,21 @@ server <- function(input, output, session) {
     trade_team_summary(trade_log())
   })
 
+  live_trade_log_current_round <- reactive({
+    data <- dashboard_data()
+    round_value <- current_round()
+    req(!is.na(round_value))
+
+    live_round_trade_log(
+      team_players_latest = data$team_players_latest,
+      player_id_lookup = data$player_id_lookup,
+      player_price_history = data$player_price_history,
+      ladder_history = data$ladder_history,
+      actual_trade_history = data$actual_trade_history,
+      current_round = round_value
+    )
+  })
+
   cash_generation_clean <- reactive({
     df <- dashboard_data()$cash_generation
     if (is.null(df) || nrow(df) == 0) {
@@ -3478,7 +3606,9 @@ server <- function(input, output, session) {
     live_team_finance(
       team_players_latest = data$team_players_latest,
       master_player = data$master_player,
-      ladder_history = data$ladder_history
+      ladder_history = data$ladder_history,
+      current_round = current_round(),
+      live_trade_log = live_trade_log_current_round()
     )
   })
 
@@ -5155,6 +5285,80 @@ server <- function(input, output, session) {
         Table = table_name,
         Field = field,
         Definition = definition
+      )
+  })
+
+  output$live_round_trade_table <- safe_table({
+    live_tbl <- live_trade_log_current_round()
+
+    if (is.null(live_tbl) || !nrow(live_tbl)) {
+      return(data.frame(
+        Status = paste0(
+          "No live round ", current_round() %||% "NA",
+          " trade rows are currently detected. This usually means no saved round snapshot delta exists yet, or no actual API trades were returned."
+        ),
+        check.names = FALSE
+      ))
+    }
+
+    live_tbl %>%
+      mutate(
+        Side = case_when(
+          user_team_id == current_matchup()$my_team_id ~ "You",
+          user_team_id == current_matchup()$opponent_team_id ~ "Opponent",
+          TRUE ~ "League"
+        ),
+        Source = if_else(trade_source == "actual_api", "Actual API", "Inferred from live roster delta"),
+        `Cash Delta` = sell_price - buy_price
+      ) %>%
+      arrange(Side, team_name, coach_name, desc(Source), buy_player_name) %>%
+      transmute(
+        Side,
+        Team = team_name,
+        Coach = coach_name,
+        Source,
+        `Sell Player` = sell_player_name,
+        `Sell Price (R-1)` = dollar(sell_price),
+        `Buy Player` = buy_player_name,
+        `Buy Price (R-1)` = dollar(buy_price),
+        `Cash Delta` = dollar(`Cash Delta`)
+      )
+  })
+
+  output$live_trade_finance_table <- safe_table({
+    finance <- finance_snapshot()
+    if (is.null(finance) || !nrow(finance)) {
+      return(data.frame(Status = "No finance snapshot available.", check.names = FALSE))
+    }
+
+    finance %>%
+      left_join(
+        team_lookup_from_ladder(dashboard_data()$ladder_history),
+        by = "user_team_id"
+      ) %>%
+      mutate(
+        Side = case_when(
+          user_team_id == current_matchup()$my_team_id ~ "You",
+          user_team_id == current_matchup()$opponent_team_id ~ "Opponent",
+          TRUE ~ "League"
+        )
+      ) %>%
+      arrange(factor(Side, levels = c("You", "Opponent", "League")), team_name, coach_name) %>%
+      transmute(
+        Side,
+        Team = team_name,
+        Coach = coach_name,
+        `Latest Squad Pull` = paste0("R", latest_round),
+        `Finance Base Round` = if_else(!is.na(prior_finance_round), paste0("R", prior_finance_round), paste0("R", finance_round)),
+        `Live Trade Rows` = live_trade_rows,
+        `Actual API Rows` = live_actual_trade_rows,
+        `Inferred Rows` = live_inferred_trade_rows,
+        `Buy Total (R-1)` = dollar(live_total_buy_price),
+        `Sell Total (R-1)` = dollar(live_total_sell_price),
+        `Live Cash Delta` = dollar(live_cash_delta),
+        `Live Cash` = dollar(live_cash_end_round_calc),
+        `Live Squad Value` = dollar(live_squad_value_calc),
+        `Live Total Value` = dollar(live_team_value_total_calc)
       )
   })
 
