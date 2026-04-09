@@ -1400,6 +1400,10 @@ choose_planner_reserves <- function(
     return(integer())
   }
 
+  if (!"bogus_value" %in% names(players)) {
+    players <- players %>% mutate(bogus_value = 0)
+  }
+
   locked_on_ids <- unique(locked_on_ids %||% integer())
   locked_off_ids <- unique(locked_off_ids %||% integer())
 
