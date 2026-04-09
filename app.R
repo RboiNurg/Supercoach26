@@ -132,6 +132,7 @@ load_dashboard_data <- function() {
     team_round_stats_history = read_required_rds(file.path(data_dir, "team_round_stats_history.rds")),
     players_cf_latest = read_required_rds(file.path(data_dir, "players_cf_latest.rds")),
     team_players_latest = read_required_rds(file.path(data_dir, "team_players_latest.rds")),
+    team_round_signatures = read_optional_rds(file.path(data_dir, "team_round_signatures.rds")),
     player_id_lookup = read_required_rds(file.path(data_dir, "player_id_lookup.rds")),
     player_price_history = read_required_rds(file.path(data_dir, "player_price_history_sc.rds")),
     actual_trade_history = read_required_rds(file.path(data_dir, "actual_trade_history.rds")),
@@ -261,6 +262,95 @@ live_round_trade_cash_summary <- function(live_trade_log) {
       live_cash_delta = sum(coalesce(sell_price, 0) - coalesce(buy_price, 0), na.rm = TRUE),
       .groups = "drop"
     )
+}
+
+parse_signature_bool <- function(x) {
+  ifelse(
+    x %in% c("TRUE", "FALSE"),
+    x == "TRUE",
+    NA
+  )
+}
+
+signature_token_at <- function(tokens, index) {
+  if (length(tokens) >= index) tokens[[index]] else NA_character_
+}
+
+expand_team_round_signatures <- function(team_round_signatures) {
+  if (is.null(team_round_signatures) || !nrow(team_round_signatures)) {
+    return(NULL)
+  }
+
+  rows <- lapply(seq_len(nrow(team_round_signatures)), function(i) {
+    sig <- team_round_signatures$roster_signature[[i]]
+    if (is.na(sig) || !nzchar(sig)) {
+      return(NULL)
+    }
+
+    pieces <- strsplit(sig, "\\|", perl = TRUE)[[1]]
+    piece_tbl <- bind_rows(lapply(pieces, function(piece) {
+      tokens <- strsplit(piece, "::", fixed = TRUE)[[1]]
+      tibble(
+        player_id = suppressWarnings(as.integer(signature_token_at(tokens, 1))),
+        position = signature_token_at(tokens, 2),
+        position_long = signature_token_at(tokens, 3),
+        position_sort = suppressWarnings(as.integer(signature_token_at(tokens, 4))),
+        picked = parse_signature_bool(signature_token_at(tokens, 5))
+      )
+    }))
+
+    if (!nrow(piece_tbl)) {
+      return(NULL)
+    }
+
+    piece_tbl %>%
+      mutate(
+        run_ts = team_round_signatures$run_ts[[i]],
+        user_team_id = team_round_signatures$user_team_id[[i]],
+        round = team_round_signatures$round[[i]],
+        updated = NA_character_,
+        players = NA
+      ) %>%
+      select(run_ts, user_team_id, round, player_id, picked, position, updated, position_long, position_sort, players)
+  })
+
+  bind_rows(rows)
+}
+
+augment_team_players_with_signatures <- function(team_players_latest, team_round_signatures, current_round = NA_integer_) {
+  if (is.null(team_players_latest) || !nrow(team_players_latest)) {
+    return(team_players_latest)
+  }
+
+  if (is.null(team_round_signatures) || !nrow(team_round_signatures)) {
+    return(team_players_latest)
+  }
+
+  signature_players <- expand_team_round_signatures(team_round_signatures)
+  if (is.null(signature_players) || !nrow(signature_players)) {
+    return(team_players_latest)
+  }
+
+  if (!is.na(current_round)) {
+    signature_players <- signature_players %>% filter(round == current_round)
+  }
+
+  if (!nrow(signature_players)) {
+    return(team_players_latest)
+  }
+
+  existing_team_rounds <- team_players_latest %>%
+    distinct(user_team_id, round)
+
+  signature_only_rows <- signature_players %>%
+    anti_join(existing_team_rounds, by = c("user_team_id", "round"))
+
+  if (!nrow(signature_only_rows)) {
+    return(team_players_latest)
+  }
+
+  bind_rows(team_players_latest, signature_only_rows) %>%
+    arrange(user_team_id, round, position_sort, position, player_id)
 }
 
 live_team_finance <- function(team_players_latest, master_player, ladder_history, current_round = NA_integer_, live_trade_log = NULL) {
@@ -3518,6 +3608,15 @@ server <- function(input, output, session) {
     load_dashboard_data()
   })
 
+  effective_team_players_live <- reactive({
+    data <- dashboard_data()
+    augment_team_players_with_signatures(
+      team_players_latest = data$team_players_latest,
+      team_round_signatures = data$team_round_signatures,
+      current_round = current_round()
+    )
+  })
+
   zero_tackle_injuries <- reactive({
     data <- dashboard_data()
     fetch_zero_tackle_injuries(
@@ -3533,7 +3632,7 @@ server <- function(input, output, session) {
     }
 
     build_trade_log(
-      team_players_latest = data$team_players_latest,
+      team_players_latest = effective_team_players_live(),
       player_id_lookup = data$player_id_lookup,
       player_price_history = data$player_price_history,
       ladder_history = data$ladder_history,
@@ -3565,7 +3664,7 @@ server <- function(input, output, session) {
     }
 
     live_round_trade_log(
-      team_players_latest = data$team_players_latest,
+      team_players_latest = effective_team_players_live(),
       player_id_lookup = data$player_id_lookup,
       player_price_history = data$player_price_history,
       ladder_history = data$ladder_history,
@@ -3633,7 +3732,7 @@ server <- function(input, output, session) {
   finance_snapshot <- reactive({
     data <- dashboard_data()
     live_team_finance(
-      team_players_latest = data$team_players_latest,
+      team_players_latest = effective_team_players_live(),
       master_player = data$master_player,
       ladder_history = data$ladder_history,
       current_round = current_round(),
