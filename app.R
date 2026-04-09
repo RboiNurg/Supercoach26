@@ -1387,10 +1387,21 @@ solve_best_lineup_constrained <- function(players, slots, value_col, fixed_assig
     arrange(match(slot, slots$slot))
 }
 
-choose_planner_reserves <- function(players, field_ids, final_ids, current_reserves = integer(), n_reserves = 4L) {
+choose_planner_reserves <- function(
+  players,
+  field_ids,
+  final_ids,
+  current_reserves = integer(),
+  n_reserves = 4L,
+  locked_on_ids = integer(),
+  locked_off_ids = integer()
+) {
   if (is.null(players) || !nrow(players)) {
     return(integer())
   }
+
+  locked_on_ids <- unique(locked_on_ids %||% integer())
+  locked_off_ids <- unique(locked_off_ids %||% integer())
 
   bench <- players %>%
     filter(!player_id %in% field_ids) %>%
@@ -1404,7 +1415,14 @@ choose_planner_reserves <- function(players, field_ids, final_ids, current_reser
     ) %>%
     arrange(desc(real_score), desc(final_target), kickoff_rank, desc(bogus_value), player)
 
-  head(bench$player_id, n_reserves)
+  locked_on_ids <- intersect(locked_on_ids, bench$player_id)
+  locked_off_ids <- intersect(locked_off_ids, bench$player_id)
+
+  available_pick_ids <- setdiff(bench$player_id, c(locked_on_ids, locked_off_ids))
+  remaining_n <- max(n_reserves - length(locked_on_ids), 0L)
+  picked_ids <- head(available_pick_ids, remaining_n)
+
+  unique(c(locked_on_ids, picked_ids))
 }
 
 order_planner_bench_ids <- function(players, field_ids, reserve_ids = integer(), current_bench_ids = integer()) {
@@ -2279,9 +2297,14 @@ planner_force_slots_to_target <- function(current_assign, current_bench_ids, tar
   list(assign = updated_assign, bench_ids = current_bench)
 }
 
-planner_locked_state <- function(roster, current_assign, current_bench_ids, before_kickoff_utc) {
+planner_locked_state <- function(roster, current_assign, current_bench_ids, current_reserves = integer(), before_kickoff_utc) {
   if (is.null(roster) || !nrow(roster) || is.null(current_assign) || !nrow(current_assign)) {
-    return(list(locked_field = tibble::tibble(), locked_bench_ids = integer()))
+    return(list(
+      locked_field = tibble::tibble(),
+      locked_bench_ids = integer(),
+      locked_reserve_on_ids = integer(),
+      locked_reserve_off_ids = integer()
+    ))
   }
 
   roster_times <- roster %>%
@@ -2292,22 +2315,31 @@ planner_locked_state <- function(roster, current_assign, current_bench_ids, befo
     filter(!is.na(next_kickoff_utc), next_kickoff_utc < before_kickoff_utc) %>%
     select(slot, player_id, player)
 
-  locked_bench_ids <- tibble::tibble(player_id = current_bench_ids %||% integer()) %>%
+  bench_tbl <- tibble::tibble(
+    player_id = current_bench_ids %||% integer(),
+    reserve_on = (current_bench_ids %||% integer()) %in% (current_reserves %||% integer())
+  ) %>%
     left_join(roster_times, by = "player_id") %>%
-    filter(!is.na(next_kickoff_utc), next_kickoff_utc < before_kickoff_utc) %>%
-    pull(player_id)
+    filter(!is.na(next_kickoff_utc), next_kickoff_utc < before_kickoff_utc)
+
+  locked_bench_ids <- bench_tbl %>% pull(player_id)
+  locked_reserve_on_ids <- bench_tbl %>% filter(reserve_on %in% TRUE) %>% pull(player_id)
+  locked_reserve_off_ids <- bench_tbl %>% filter(!reserve_on %in% TRUE) %>% pull(player_id)
 
   list(
     locked_field = locked_field,
-    locked_bench_ids = locked_bench_ids
+    locked_bench_ids = locked_bench_ids,
+    locked_reserve_on_ids = locked_reserve_on_ids,
+    locked_reserve_off_ids = locked_reserve_off_ids
   )
 }
 
-planner_reachable_target <- function(roster, slots, current_assign, current_bench_ids, before_kickoff_utc) {
+planner_reachable_target <- function(roster, slots, current_assign, current_bench_ids, current_reserves = integer(), before_kickoff_utc) {
   locked_state <- planner_locked_state(
     roster = roster,
     current_assign = current_assign,
     current_bench_ids = current_bench_ids,
+    current_reserves = current_reserves,
     before_kickoff_utc = before_kickoff_utc
   )
 
@@ -4303,6 +4335,7 @@ server <- function(input, output, session) {
         slots = slots,
         current_assign = state_assign,
         current_bench_ids = state_bench_ids,
+        current_reserves = state_reserves,
         before_kickoff_utc = kickoff_value
       )
 
@@ -4365,11 +4398,20 @@ server <- function(input, output, session) {
       )
       move_text <- move_state$text
       carried_reserves <- carry_reserves_by_bench_slots(state_bench_ids, move_state$bench_ids, state_reserves)
+      locked_state_after_moves <- planner_locked_state(
+        roster = state_roster,
+        current_assign = batch_assign,
+        current_bench_ids = move_state$bench_ids,
+        current_reserves = carried_reserves,
+        before_kickoff_utc = kickoff_value
+      )
       next_reserves <- choose_planner_reserves(
         state_roster,
         batch_assign$player_id,
         final_ids,
-        current_reserves = carried_reserves
+        current_reserves = carried_reserves,
+        locked_on_ids = locked_state_after_moves$locked_reserve_on_ids,
+        locked_off_ids = locked_state_after_moves$locked_reserve_off_ids
       )
       transfer_captaincy <- planner_transfer_slot_captaincy(
         from_assign = state_assign,
@@ -4510,12 +4552,7 @@ server <- function(input, output, session) {
         )
       )
 
-    final_reserve_ids <- choose_planner_reserves(
-      future_roster,
-      final_assign_reachable$player_id,
-      final_assign_reachable$player_id,
-      current_reserves = state_reserves
-    )
+    final_reserve_ids <- state_reserves %||% integer()
     final_bench <- build_planner_bench_state(
       players = future_roster,
       field_ids = final_assign_reachable$player_id,
