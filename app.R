@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-cvc-diversified-7efb8ea"
+planner_logic_build <- "planner-generate-fix-20260409b"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -338,6 +338,12 @@ fetch_zero_tackle_injuries <- function(
   current_round = NA_integer_,
   page_url = "https://www.zerotackle.com/nrl/injuries-suspensions/"
 ) {
+  current_round <- if (length(current_round) == 0 || all(is.na(current_round))) {
+    NA_integer_
+  } else {
+    suppressWarnings(as.integer(current_round[[1]]))
+  }
+
   html <- tryCatch(
     paste(suppressWarnings(readLines(page_url, warn = FALSE, encoding = "UTF-8")), collapse = "\n"),
     error = function(e) ""
@@ -2011,13 +2017,43 @@ planner_reachable_target <- function(roster, slots, current_assign, current_benc
     before_kickoff_utc = before_kickoff_utc
   )
 
-  solve_best_lineup_constrained(
-    players = roster,
+  excluded_ids <- unique(locked_state$locked_bench_ids %||% integer())
+  fixed_ids <- unique(locked_state$locked_field$player_id %||% integer())
+  current_ids <- unique(current_assign$player_id %||% integer())
+
+  candidate_ids <- unique(c(fixed_ids, current_ids))
+
+  remaining_candidates <- roster %>%
+    filter(!player_id %in% excluded_ids, !player_id %in% candidate_ids) %>%
+    arrange(desc(real_score), player)
+
+  candidate_ids <- unique(c(
+    candidate_ids,
+    head(remaining_candidates$player_id, nrow(slots) + 6L)
+  ))
+
+  reduced_roster <- roster %>%
+    filter(player_id %in% candidate_ids, !player_id %in% excluded_ids)
+
+  reachable <- solve_best_lineup_constrained(
+    players = reduced_roster,
     slots = slots,
     value_col = "real_score",
     fixed_assign = locked_state$locked_field,
-    excluded_ids = locked_state$locked_bench_ids
+    excluded_ids = excluded_ids
   )
+
+  if (is.null(reachable) || !nrow(reachable)) {
+    reachable <- solve_best_lineup_constrained(
+      players = roster,
+      slots = slots,
+      value_col = "real_score",
+      fixed_assign = locked_state$locked_field,
+      excluded_ids = excluded_ids
+    )
+  }
+
+  reachable
 }
 
 parse_history_numeric <- function(history_string) {
@@ -3552,64 +3588,65 @@ server <- function(input, output, session) {
   })
 
   planner_bundle <- eventReactive(input$planner_generate, {
-    planner_seed <- planner_trade_bundle()
-    current_roster <- planner_seed$current_roster
-    future_market <- planner_seed$future_market
-    trades <- planner_seed$trades
-    slots <- slot_template_from_game_rules(dashboard_data()$game_rules)
-    notes <- planner_seed$notes
-    trades_complete <- planner_seed$trades_complete
-    trade_out_ids <- planner_seed$trade_out_ids
-    trade_in_ids <- planner_seed$trade_in_ids
-    future_roster <- planner_seed$future_roster
+    tryCatch({
+      planner_seed <- planner_trade_bundle()
+      current_roster <- planner_seed$current_roster
+      future_market <- planner_seed$future_market
+      trades <- planner_seed$trades
+      slots <- slot_template_from_game_rules(dashboard_data()$game_rules)
+      notes <- planner_seed$notes
+      trades_complete <- planner_seed$trades_complete
+      trade_out_ids <- planner_seed$trade_out_ids
+      trade_in_ids <- planner_seed$trade_in_ids
+      future_roster <- planner_seed$future_roster
 
-    ideal_final_assign <- solve_best_lineup(future_roster, slots, "real_score")
-    req(!is.null(ideal_final_assign), nrow(ideal_final_assign) > 0)
+      ideal_final_assign <- solve_best_lineup(future_roster, slots, "real_score")
+      req(!is.null(ideal_final_assign), nrow(ideal_final_assign) > 0)
 
-    final_ids <- ideal_final_assign$player_id
-    kickoff_candidates <- future_roster$next_kickoff_utc[!is.na(future_roster$next_kickoff_utc)]
-    first_kickoff <- if (length(kickoff_candidates)) min(kickoff_candidates) else as.POSIXct(NA, tz = "UTC")
+      final_ids <- ideal_final_assign$player_id
+      kickoff_candidates <- future_roster$next_kickoff_utc[!is.na(future_roster$next_kickoff_utc)]
+      first_kickoff <- if (length(kickoff_candidates)) min(kickoff_candidates) else as.POSIXct(NA, tz = "UTC")
 
-    current_target_ids <- intersect(final_ids, current_roster$player_id)
-    current_roster <- current_roster %>%
-      mutate(
-        late_bonus = case_when(
-          is.na(next_kickoff_utc) ~ 22,
-          !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
-          TRUE ~ 0
-        ),
-        placeholder_bonus = case_when(
-          bye_this_round %in% TRUE ~ 12,
-          risk_band == "high" ~ 10,
-          TRUE ~ 0
-        ),
-        bogus_value = if_else(player_id %in% trade_out_ids, 42, 0) +
-          if_else(!player_id %in% current_target_ids, 24, -14) +
-          late_bonus +
-          placeholder_bonus -
-          real_score / 8
-      )
+      current_target_ids <- intersect(final_ids, current_roster$player_id)
+      current_roster <- current_roster %>%
+        mutate(
+          late_bonus = case_when(
+            is.na(next_kickoff_utc) ~ 22,
+            !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
+            TRUE ~ 0
+          ),
+          placeholder_bonus = case_when(
+            bye_this_round %in% TRUE ~ 12,
+            risk_band == "high" ~ 10,
+            TRUE ~ 0
+          ),
+          bogus_value = if_else(player_id %in% trade_out_ids, 42, 0) +
+            if_else(!player_id %in% current_target_ids, 24, -14) +
+            late_bonus +
+            placeholder_bonus -
+            real_score / 8
+        )
 
-    pre_assign <- solve_best_lineup(current_roster, slots, "bogus_value")
-    req(!is.null(pre_assign), nrow(pre_assign) > 0)
+      pre_assign <- solve_best_lineup(current_roster, slots, "bogus_value")
+      req(!is.null(pre_assign), nrow(pre_assign) > 0)
 
-    future_roster <- future_roster %>%
-      mutate(
-        late_bonus = case_when(
-          is.na(next_kickoff_utc) ~ 18,
-          !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
-          TRUE ~ 0
-        ),
-        placeholder_bonus = case_when(
-          bye_this_round %in% TRUE ~ 12,
-          risk_band == "high" ~ 9,
-          TRUE ~ 0
-        ),
-        bogus_value = if_else(!player_id %in% final_ids, 26, -14) +
-          late_bonus +
-          placeholder_bonus -
-          real_score / 8
-      )
+      future_roster <- future_roster %>%
+        mutate(
+          late_bonus = case_when(
+            is.na(next_kickoff_utc) ~ 18,
+            !is.na(first_kickoff) ~ pmax(as.numeric(difftime(next_kickoff_utc, first_kickoff, units = "hours")), 0) / 3,
+            TRUE ~ 0
+          ),
+          placeholder_bonus = case_when(
+            bye_this_round %in% TRUE ~ 12,
+            risk_band == "high" ~ 9,
+            TRUE ~ 0
+          ),
+          bogus_value = if_else(!player_id %in% final_ids, 26, -14) +
+            late_bonus +
+            placeholder_bonus -
+            real_score / 8
+        )
 
     post_assign <- if (nrow(trades_complete)) apply_trades_to_assignment(pre_assign, future_roster, trades_complete) else pre_assign
     req(!is.null(post_assign), nrow(post_assign) > 0)
@@ -4046,12 +4083,21 @@ server <- function(input, output, session) {
       data.frame()
     }
 
-    list(
-      status_text = paste(status_lines, collapse = "\n"),
-      starting_setup = starting_setup,
-      move_schedule = move_schedule,
-      final_setup = final_setup
-    )
+      list(
+        status_text = paste(status_lines, collapse = "\n"),
+        starting_setup = starting_setup,
+        move_schedule = move_schedule,
+        final_setup = final_setup
+      )
+    }, error = function(e) {
+      error_text <- paste0("Planner error: ", conditionMessage(e))
+      list(
+        status_text = error_text,
+        starting_setup = data.frame(Status = error_text, check.names = FALSE),
+        move_schedule = data.frame(Status = error_text, check.names = FALSE),
+        final_setup = data.frame(Status = error_text, check.names = FALSE)
+      )
+    })
   }, ignoreInit = TRUE)
 
   live_ladder_round <- reactive({
