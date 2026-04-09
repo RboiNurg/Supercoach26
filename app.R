@@ -466,6 +466,39 @@ planner_projection_lookup <- function(squad_round_enriched) {
     )
 }
 
+planner_position_lookup <- function(team_players_latest) {
+  if (is.null(team_players_latest) || !nrow(team_players_latest)) {
+    return(tibble::tibble(player_id = integer(), derived_positions_string = character()))
+  }
+
+  usable <- team_players_latest %>%
+    filter(!is.na(player_id), !is.na(position), nzchar(position)) %>%
+    mutate(
+      position = toupper(trimws(position)),
+      valid_position = position %in% c("HOK", "FRF", "2RF", "HFB", "5/8", "CTW", "FLB")
+    ) %>%
+    filter(valid_position %in% TRUE)
+
+  if (!nrow(usable)) {
+    return(tibble::tibble(player_id = integer(), derived_positions_string = character()))
+  }
+
+  usable %>%
+    group_by(player_id, position) %>%
+    summarise(
+      n_obs = n(),
+      latest_round = suppressWarnings(max(round, na.rm = TRUE)),
+      latest_run_ts = suppressWarnings(max(run_ts, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    arrange(player_id, desc(n_obs), desc(latest_round), desc(latest_run_ts), position) %>%
+    group_by(player_id) %>%
+    summarise(
+      derived_positions_string = paste(unique(position), collapse = "/"),
+      .groups = "drop"
+    )
+}
+
 team_lookup_from_ladder <- function(ladder_history) {
   if (is.null(ladder_history) || !nrow(ladder_history)) {
     return(NULL)
@@ -2028,6 +2061,7 @@ prepare_planner_roster <- function(
   base_players,
   master_player,
   player_id_lookup,
+  position_lookup = NULL,
   availability_risk,
   zero_tackle_tbl,
   next_fixture_lookup,
@@ -2085,6 +2119,10 @@ prepare_planner_roster <- function(
     projected_score_this_week_lookup = numeric(),
     projected_score_next_3_weeks_lookup = numeric()
   )
+  position_lookup <- position_lookup %||% tibble::tibble(
+    player_id = integer(),
+    derived_positions_string = character()
+  )
 
   base_players %>%
     left_join(
@@ -2121,6 +2159,10 @@ prepare_planner_roster <- function(
       by = "player_id"
     ) %>%
     left_join(
+      position_lookup,
+      by = "player_id"
+    ) %>%
+    left_join(
       availability_risk %>%
         transmute(
           player_id,
@@ -2147,7 +2189,12 @@ prepare_planner_roster <- function(
       player = coalesce(lookup_name, master_name, full_name),
       team_abbrev = coalesce(team_abbrev, lookup_team_abbrev, master_team_abbrev),
       current_position = coalesce(position, positions_string),
-      positions_string = coalesce(positions_string, current_position),
+      positions_string = coalesce(positions_string, derived_positions_string, current_position),
+      positions_string = if_else(
+        is.na(positions_string) | !nzchar(positions_string) | positions_string == "FLX",
+        coalesce(derived_positions_string, current_position),
+        positions_string
+      ),
       slot_position_seed = vapply(
         seq_len(n()),
         function(i) {
@@ -3258,6 +3305,7 @@ server <- function(input, output, session) {
   planner_market_pool <- reactive({
     data <- dashboard_data()
     projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
+    position_lookup <- planner_position_lookup(data$team_players_latest)
 
     prepare_planner_roster(
       base_players = data$master_player %>%
@@ -3269,6 +3317,7 @@ server <- function(input, output, session) {
         ),
       master_player = data$master_player,
       player_id_lookup = data$player_id_lookup,
+      position_lookup = position_lookup,
       availability_risk = data$availability_risk,
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
@@ -3282,6 +3331,7 @@ server <- function(input, output, session) {
     data <- dashboard_data()
     context <- planner_context()
     projection_lookup <- planner_projection_lookup(data$squad_round_enriched)
+    position_lookup <- planner_position_lookup(data$team_players_latest)
     req(!is.na(context$my_team_id))
 
     snapshot <- latest_team_players_snapshot(data$team_players_latest, context$my_team_id)
@@ -3291,6 +3341,7 @@ server <- function(input, output, session) {
       base_players = snapshot,
       master_player = data$master_player,
       player_id_lookup = data$player_id_lookup,
+      position_lookup = position_lookup,
       availability_risk = data$availability_risk,
       zero_tackle_tbl = zero_tackle_injuries(),
       next_fixture_lookup = club_next_fixture(),
