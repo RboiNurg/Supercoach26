@@ -524,8 +524,8 @@ trade_round_summary <- function(trade_log) {
     group_by(user_team_id, round) %>%
     summarise(
       detected_changes = n(),
-      actual_moves = sum(trade_source == "actual_api", na.rm = TRUE),
-      inferred_moves = sum(trade_source != "actual_api", na.rm = TRUE),
+      actual_moves = sum(startsWith(trade_source, "actual_api"), na.rm = TRUE),
+      inferred_moves = sum(!startsWith(trade_source, "actual_api"), na.rm = TRUE),
       .groups = "drop"
     )
 }
@@ -1351,7 +1351,7 @@ build_gpt_prompt_pack <- function(
         round,
         team = team_name,
         coach = coach_name,
-        source = if_else(trade_source == "actual_api", "Actual API", "Inferred round delta"),
+        source = if_else(startsWith(trade_source, "actual_api"), "Actual API", "Inferred round delta"),
         sell_player = sell_player_name,
         sell_price = fmt_money(sell_price),
         buy_player = buy_player_name,
@@ -1387,7 +1387,7 @@ build_gpt_prompt_pack <- function(
         sells = paste(na.omit(sell_player_name), collapse = ", "),
         buy_value = fmt_money(sum(buy_price, na.rm = TRUE)),
         sell_value = fmt_money(sum(sell_price, na.rm = TRUE)),
-        source_mix = paste(sort(unique(if_else(trade_source == "actual_api", "Actual API", "Inferred delta"))), collapse = ", "),
+        source_mix = paste(sort(unique(if_else(startsWith(trade_source, "actual_api"), "Actual API", "Inferred delta"))), collapse = ", "),
         .groups = "drop"
       ) %>%
       arrange(desc(round)) %>%

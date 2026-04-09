@@ -458,6 +458,7 @@ get_ladder_fixtures_round <- function(round_value) {
       run_ts = run_ts,
       league_id = safe_int(z$league_id, league_id),
       round = safe_int(z$round, round_value),
+      user_id = safe_int(z$userTeam$user$id),
       user_team_id = safe_int(z$user_team_id),
       team_name = safe_chr(z$userTeam$teamname),
       coach_name = safe_chr(z$userTeam$user$first_name),
@@ -1412,25 +1413,25 @@ trade_round_summary <- function(trade_log) {
     group_by(user_team_id, round) %>%
     summarise(
       detected_changes = n(),
-      actual_moves = sum(trade_source == "actual_api", na.rm = TRUE),
-      inferred_moves = sum(trade_source != "actual_api", na.rm = TRUE),
+      actual_moves = sum(startsWith(trade_source, "actual_api"), na.rm = TRUE),
+      inferred_moves = sum(!startsWith(trade_source, "actual_api"), na.rm = TRUE),
       actual_trades = list(tibble(
-        buy_player_id = buy_player_id[trade_source == "actual_api"],
-        sell_player_id = sell_player_id[trade_source == "actual_api"],
-        buy_player_name = buy_player_name[trade_source == "actual_api"],
-        sell_player_name = sell_player_name[trade_source == "actual_api"],
-        buy_price = buy_price[trade_source == "actual_api"],
-        sell_price = sell_price[trade_source == "actual_api"],
-        trade_source = trade_source[trade_source == "actual_api"]
+        buy_player_id = buy_player_id[startsWith(trade_source, "actual_api")],
+        sell_player_id = sell_player_id[startsWith(trade_source, "actual_api")],
+        buy_player_name = buy_player_name[startsWith(trade_source, "actual_api")],
+        sell_player_name = sell_player_name[startsWith(trade_source, "actual_api")],
+        buy_price = buy_price[startsWith(trade_source, "actual_api")],
+        sell_price = sell_price[startsWith(trade_source, "actual_api")],
+        trade_source = trade_source[startsWith(trade_source, "actual_api")]
       )),
       inferred_trade_pairs = list(tibble(
-        buy_player_id = buy_player_id[trade_source != "actual_api"],
-        sell_player_id = sell_player_id[trade_source != "actual_api"],
-        buy_player_name = buy_player_name[trade_source != "actual_api"],
-        sell_player_name = sell_player_name[trade_source != "actual_api"],
-        buy_price = buy_price[trade_source != "actual_api"],
-        sell_price = sell_price[trade_source != "actual_api"],
-        trade_source = trade_source[trade_source != "actual_api"]
+        buy_player_id = buy_player_id[!startsWith(trade_source, "actual_api")],
+        sell_player_id = sell_player_id[!startsWith(trade_source, "actual_api")],
+        buy_player_name = buy_player_name[!startsWith(trade_source, "actual_api")],
+        sell_player_name = sell_player_name[!startsWith(trade_source, "actual_api")],
+        buy_price = buy_price[!startsWith(trade_source, "actual_api")],
+        sell_price = sell_price[!startsWith(trade_source, "actual_api")],
+        trade_source = trade_source[!startsWith(trade_source, "actual_api")]
       )),
       .groups = "drop"
     )

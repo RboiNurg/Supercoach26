@@ -3,6 +3,7 @@ refresh_supercoach_logs <- function() {
     run_ts = as.POSIXct(character()),
     league_id = integer(),
     round = integer(),
+    user_id = integer(),
     user_team_id = integer()
   )
 
@@ -42,9 +43,11 @@ refresh_supercoach_logs <- function() {
   empty_actual_trade_history <- tibble(
     run_ts = as.POSIXct(character()),
     round = integer(),
+    user_id = integer(),
     user_team_id = integer(),
     buy_player_id = integer(),
     sell_player_id = integer(),
+    action_time = character(),
     trade_source = character()
   )
 
@@ -717,6 +720,40 @@ refresh_supercoach_logs <- function() {
     distinct(run_ts, fixture_id, .keep_all = TRUE) %>%
     arrange(run_ts, round, fixture)
 
+  fetch_league_trade_feed <- function() {
+    raw <- tryCatch(
+      sc_get_json(
+        paste0("/leagues/", league_id, "/trades"),
+        query = list(round = next_round %||% current_round)
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(raw) || !length(raw)) {
+      return(empty_actual_trade_history)
+    }
+
+    raw_tbl <- purrr::map_dfr(raw %||% list(), function(z) {
+      tibble(
+        run_ts = run_ts,
+        round = safe_int(z$round),
+        user_id = safe_int(z$user_id),
+        user_team_id = safe_int(z$user_id),
+        buy_player_id = safe_int(z$buy_player_id),
+        sell_player_id = safe_int(z$sell_player_id),
+        action_time = safe_chr(z$action_time),
+        trade_source = "actual_api_league"
+      )
+    })
+
+    if (!nrow(raw_tbl)) {
+      return(empty_actual_trade_history)
+    }
+
+    raw_tbl %>%
+      select(run_ts, round, user_id, user_team_id, buy_player_id, sell_player_id, action_time, trade_source)
+  }
+
   team_lookup <- ladder_history %>%
     distinct(user_team_id, team_name, coach_name, is_me) %>%
     filter(!is.na(user_team_id))
@@ -784,6 +821,8 @@ refresh_supercoach_logs <- function() {
     select(trades) %>%
     unnest(trades)
 
+  actual_trade_history_live <- fetch_league_trade_feed()
+
   team_round_stats_history <- bind_rows(
     team_round_stats_history_existing,
     team_round_stats_history_new
@@ -793,9 +832,26 @@ refresh_supercoach_logs <- function() {
 
   actual_trade_history <- bind_rows(
     actual_trade_history_existing,
-    actual_trade_history_new
+    actual_trade_history_new,
+    actual_trade_history_live
   ) %>%
-    distinct(round, user_team_id, buy_player_id, sell_player_id, .keep_all = TRUE) %>%
+    filter(trade_source != "actual_api_unmapped") %>%
+    mutate(
+      mapped_trade_flag = !is.na(user_team_id) & trade_source != "actual_api_unmapped",
+      action_time = coalesce(action_time, "")
+    ) %>%
+    arrange(
+      round,
+      buy_player_id,
+      sell_player_id,
+      desc(mapped_trade_flag),
+      desc(run_ts),
+      desc(action_time)
+    ) %>%
+    group_by(round, buy_player_id, sell_player_id) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    select(-mapped_trade_flag) %>%
     arrange(round, user_team_id, buy_player_id, sell_player_id)
 
   latest_existing_signatures <- team_round_signatures_existing %>%

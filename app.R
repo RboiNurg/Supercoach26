@@ -255,8 +255,8 @@ live_round_trade_cash_summary <- function(live_trade_log) {
     group_by(user_team_id, team_name, coach_name) %>%
     summarise(
       live_trade_rows = n(),
-      live_actual_trade_rows = sum(trade_source == "actual_api", na.rm = TRUE),
-      live_inferred_trade_rows = sum(trade_source != "actual_api", na.rm = TRUE),
+      live_actual_trade_rows = sum(startsWith(trade_source, "actual_api"), na.rm = TRUE),
+      live_inferred_trade_rows = sum(!startsWith(trade_source, "actual_api"), na.rm = TRUE),
       live_total_buy_price = sum(coalesce(buy_price, 0), na.rm = TRUE),
       live_total_sell_price = sum(coalesce(sell_price, 0), na.rm = TRUE),
       live_cash_delta = sum(coalesce(sell_price, 0) - coalesce(buy_price, 0), na.rm = TRUE),
@@ -865,8 +865,8 @@ trade_round_summary <- function(trade_log) {
     group_by(user_team_id, round) %>%
     summarise(
       detected_changes = n(),
-      actual_moves = sum(trade_source == "actual_api", na.rm = TRUE),
-      inferred_moves = sum(trade_source != "actual_api", na.rm = TRUE),
+      actual_moves = sum(startsWith(trade_source, "actual_api"), na.rm = TRUE),
+      inferred_moves = sum(!startsWith(trade_source, "actual_api"), na.rm = TRUE),
       .groups = "drop"
     )
 }
@@ -5437,7 +5437,7 @@ server <- function(input, output, session) {
           user_team_id == current_matchup()$opponent_team_id ~ "Opponent",
           TRUE ~ "League"
         ),
-        Source = if_else(trade_source == "actual_api", "Actual API", "Inferred from live roster delta"),
+        Source = if_else(startsWith(trade_source, "actual_api"), "Actual API", "Inferred from live roster delta"),
         `Cash Delta` = sell_price - buy_price
       ) %>%
       arrange(Side, team_name, coach_name, desc(Source), buy_player_name) %>%
@@ -5496,7 +5496,7 @@ server <- function(input, output, session) {
       filter(user_team_id %in% c(current_matchup()$my_team_id, current_matchup()$opponent_team_id)) %>%
       mutate(
         Side = if_else(user_team_id == current_matchup()$my_team_id, "You", "Opponent"),
-        Source = if_else(trade_source == "actual_api", "Actual API", "Inferred round delta")
+        Source = if_else(startsWith(trade_source, "actual_api"), "Actual API", "Inferred round delta")
       ) %>%
       arrange(desc(round), Side, desc(Source)) %>%
       transmute(
@@ -5517,7 +5517,7 @@ server <- function(input, output, session) {
 
   output$league_trade_table <- safe_table({
     trade_log() %>%
-      mutate(Source = if_else(trade_source == "actual_api", "Actual API", "Inferred round delta")) %>%
+      mutate(Source = if_else(startsWith(trade_source, "actual_api"), "Actual API", "Inferred round delta")) %>%
       arrange(desc(round), team_name, coach_name) %>%
       transmute(
         Round = round,
