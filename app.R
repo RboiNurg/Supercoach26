@@ -20,7 +20,7 @@ runtime_root <- Sys.getenv(
 data_dir <- file.path(runtime_root, paste0("supercoach_league_", league_id))
 build_prompt_script <- "scripts/build_gpt_prompt_pack.R"
 app_state <- new.env(parent = emptyenv())
-planner_logic_build <- "planner-cvc-fix-f6d61d6"
+planner_logic_build <- "planner-cvc-diversified-7efb8ea"
 
 key_bundle_files <- c(
   "game_rules_round_state.rds",
@@ -1289,18 +1289,59 @@ recommend_planner_cvc_combos <- function(players, n = 5L) {
       ),
       combo_score = captain_score + vc_score * 0.92 +
         if_else(vc_before_c, 8, 0) +
-        pmin(pmax(time_gap_hours, 0), 30) / 4
+        pmin(pmax(time_gap_hours, 0), 30) / 4 +
+        if_else(vc_before_c, 0, -4)
     ) %>%
     arrange(desc(combo_score), desc(captain_real_score), desc(vc_real_score)) %>%
     mutate(
-      recommendation = row_number(),
       rationale = case_when(
         vc_before_c & captain_real_score >= vc_real_score ~ "classic early VC, later anchor C",
         vc_before_c ~ "earlier VC with later fallback captain",
-        TRUE ~ "best raw projection pairing despite similar lock timing"
+        TRUE ~ "captain-first fallback when the strongest scorer is early"
       )
+    )
+
+  if (!nrow(combos)) {
+    return(data.frame())
+  }
+
+  selected_idx <- integer()
+  used_vc <- integer()
+  used_captain <- integer()
+  max_same_vc <- if (n >= 5L) 2L else 1L
+
+  for (i in seq_len(nrow(combos))) {
+    if (length(selected_idx) >= n) {
+      break
+    }
+
+    vc_id <- combos$vc_player_id[[i]]
+    captain_id <- combos$captain_player_id[[i]]
+    vc_count <- sum(used_vc == vc_id)
+    captain_count <- sum(used_captain == captain_id)
+
+    if (vc_count >= max_same_vc) {
+      next
+    }
+    if (captain_count >= 2L) {
+      next
+    }
+
+    selected_idx <- c(selected_idx, i)
+    used_vc <- c(used_vc, vc_id)
+    used_captain <- c(used_captain, captain_id)
+  }
+
+  if (length(selected_idx) < n) {
+    fallback_idx <- setdiff(seq_len(nrow(combos)), selected_idx)
+    selected_idx <- c(selected_idx, head(fallback_idx, n - length(selected_idx)))
+  }
+
+  combos %>%
+    slice(selected_idx) %>%
+    mutate(
+      recommendation = row_number()
     ) %>%
-    slice_head(n = n) %>%
     transmute(
       recommendation,
       vc_player_id,
@@ -1318,8 +1359,6 @@ recommend_planner_cvc_combos <- function(players, n = 5L) {
         "#", recommendation, " VC ", vc_player, " -> C ", captain_player
       )
     )
-
-  combos
 }
 
 choose_bogus_captaincy <- function(pre_assign, roster, real_vc_id = NA_integer_, real_c_id = NA_integer_) {
