@@ -3560,7 +3560,9 @@ server <- function(input, output, session) {
   live_trade_log_current_round <- reactive({
     data <- dashboard_data()
     round_value <- current_round()
-    req(!is.na(round_value))
+    if (is.na(round_value)) {
+      return(NULL)
+    }
 
     live_round_trade_log(
       team_players_latest = data$team_players_latest,
@@ -5316,12 +5318,13 @@ server <- function(input, output, session) {
   })
 
   output$live_round_trade_table <- safe_table({
-    live_tbl <- live_trade_log_current_round()
+    round_value <- tryCatch(current_round(), error = function(e) NA_integer_)
+    live_tbl <- tryCatch(live_trade_log_current_round(), error = function(e) NULL)
 
     if (is.null(live_tbl) || !nrow(live_tbl)) {
       return(data.frame(
         Status = paste0(
-          "No live round ", current_round() %||% "NA",
+          "No live round ", round_value %||% "NA",
           " trade rows are currently detected. This usually means no saved round snapshot delta exists yet, or no actual API trades were returned."
         ),
         check.names = FALSE
