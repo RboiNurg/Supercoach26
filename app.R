@@ -273,7 +273,7 @@ live_team_finance <- function(team_players_latest, master_player, ladder_history
     return(finance_base)
   }
 
-  latest_players %>%
+  finance_tbl <- latest_players %>%
     left_join(
       master_player %>%
         select(player_id, current_price),
@@ -285,9 +285,36 @@ live_team_finance <- function(team_players_latest, master_player, ladder_history
       live_missing_prices = sum(is.na(current_price)),
       .groups = "drop"
     ) %>%
-    left_join(finance_base, by = "user_team_id") %>%
-    left_join(prior_finance, by = "user_team_id") %>%
-    left_join(live_trade_cash, by = "user_team_id") %>%
+    left_join(finance_base, by = "user_team_id")
+
+  if (!is.null(prior_finance) && nrow(prior_finance)) {
+    finance_tbl <- finance_tbl %>%
+      left_join(prior_finance, by = "user_team_id")
+  } else {
+    finance_tbl <- finance_tbl %>%
+      mutate(
+        prior_finance_round = NA_integer_,
+        prior_cash_end_round_calc = NA_real_,
+        prior_team_value_total_calc = NA_real_
+      )
+  }
+
+  if (!is.null(live_trade_cash) && nrow(live_trade_cash)) {
+    finance_tbl <- finance_tbl %>%
+      left_join(live_trade_cash, by = "user_team_id")
+  } else {
+    finance_tbl <- finance_tbl %>%
+      mutate(
+        live_trade_rows = 0L,
+        live_actual_trade_rows = 0L,
+        live_inferred_trade_rows = 0L,
+        live_total_buy_price = 0,
+        live_total_sell_price = 0,
+        live_cash_delta = 0
+      )
+  }
+
+  finance_tbl %>%
     mutate(
       finance_cash_base = case_when(
         !is.na(current_round) & latest_round == current_round ~ coalesce(prior_cash_end_round_calc, finance_cash_end_round_calc),
